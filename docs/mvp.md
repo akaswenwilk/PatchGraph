@@ -4,9 +4,9 @@
 
 PatchGraph is **not** an IDE.
 
-It is a **local-first web app for reviewing and shaping AI-generated code changes**.
+It is a **local-first web app for reviewing and shaping code changes**.
 
-The core idea is that humans increasingly spend more time validating, understanding, and curating changes than writing every line themselves. Standard diff viewers show what changed, but they are weak at showing how those changes relate to the rest of the codebase.
+The core idea is that standard diff viewers show what changed, but they are weak at showing how those changes relate to the rest of the codebase. That problem matters whether the changes were written by a human, an AI agent, or both.
 
 PatchGraph should make code review feel more spatial and more connected:
 
@@ -25,7 +25,7 @@ The canvas is not there for novelty. Its job is to help answer:
 
 ## Product Goal
 
-PatchGraph is a **visual review workstation for local git changes**, optimized for AI-heavy coding workflows.
+PatchGraph is a **visual review workstation for local git changes**, with especially strong value in AI-heavy coding workflows.
 
 The product thesis is:
 
@@ -39,7 +39,7 @@ The long-term direction is still review-first, not editor-first. A future paid t
 
 The MVP should prove one concrete thing:
 
-**Does a spatial, git-aware review workspace make AI-generated changes easier to understand, split, and accept than a normal diff viewer?**
+**Does a spatial, git-aware review workspace make code changes easier to understand, split, and accept than a normal diff viewer?**
 
 To answer that, the MVP should let a user:
 
