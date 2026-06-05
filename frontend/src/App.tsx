@@ -304,7 +304,7 @@ function App() {
 			const nextFileTree = buildTree(data)
 			setOpenedProject(activeProject)
 			setFileTree(nextFileTree)
-			setExpandedPaths(new Set())
+			setExpandedPaths(new Set([activeProject.id]))
 			setFileLoadState('ready')
 			setIsModalOpen(false)
 		} catch (error) {
@@ -344,54 +344,56 @@ function App() {
 				</button>
 
 				{!isCollapsed ? (
-					<button type="button" className="open-project-button" onClick={openProjectPicker}>
-						Open Repo
-					</button>
+					<>
+						<div className="sidebar-content">
+							<div className="explorer-panel-header">
+								<div>
+									<p className="explorer-eyebrow">Explorer</p>
+									<h1>{openedProject?.name ?? 'No repo opened'}</h1>
+									<p className="explorer-subtitle">
+										{openedProject?.path ?? 'Choose a repo to load its file tree.'}
+									</p>
+								</div>
+							</div>
+
+							<div className="explorer-tree-panel">
+								{fileLoadState === 'idle' ? (
+									<p className="project-status">Open a repo to load files.</p>
+								) : null}
+								{fileLoadState === 'loading' ? (
+									<p className="project-status">Loading files…</p>
+								) : null}
+								{fileLoadState === 'error' ? (
+									<p className="project-status project-status-error">
+										Could not load files. {fileErrorMessage}
+									</p>
+								) : null}
+								{fileLoadState === 'ready' && openedProject !== null && fileTree !== null ? (
+									<ul className="tree-list">
+										<TreeBranch
+											node={{
+												name: openedProject.name,
+												path: openedProject.id,
+												kind: 'directory',
+												children: fileTree.children,
+											}}
+											depth={0}
+											expandedPaths={expandedPaths}
+											onToggle={togglePath}
+										/>
+									</ul>
+								) : null}
+							</div>
+						</div>
+
+						<button type="button" className="open-project-button" onClick={openProjectPicker}>
+							{openedProject === null ? 'Open Repo' : 'Switch Repo'}
+						</button>
+					</>
 				) : null}
 			</aside>
 
-			<main className="workspace">
-				<section className="explorer-panel" aria-label="File explorer">
-					<div className="explorer-panel-header">
-						<div>
-							<p className="explorer-eyebrow">Explorer</p>
-							<h1>{openedProject?.name ?? 'No repo opened'}</h1>
-							<p className="explorer-subtitle">
-								{openedProject?.path ?? 'Choose a repo to load its file tree.'}
-							</p>
-						</div>
-					</div>
-
-					<div className="explorer-tree-panel">
-						{fileLoadState === 'idle' ? (
-							<p className="project-status">Open a repo to load files.</p>
-						) : null}
-						{fileLoadState === 'loading' ? (
-							<p className="project-status">Loading files…</p>
-						) : null}
-						{fileLoadState === 'error' ? (
-							<p className="project-status project-status-error">
-								Could not load files. {fileErrorMessage}
-							</p>
-						) : null}
-						{fileLoadState === 'ready' && openedProject !== null && fileTree !== null ? (
-							<ul className="tree-list">
-								<TreeBranch
-									node={{
-										name: openedProject.name,
-										path: openedProject.id,
-										kind: 'directory',
-										children: fileTree.children,
-									}}
-									depth={0}
-									expandedPaths={expandedPaths}
-									onToggle={togglePath}
-								/>
-							</ul>
-						) : null}
-					</div>
-				</section>
-			</main>
+			<main className="workspace" aria-hidden="true" />
 
 			{isModalOpen ? (
 				<div className="modal-layer" role="presentation">

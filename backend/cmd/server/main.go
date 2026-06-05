@@ -47,6 +47,7 @@ func newMux(listProjects projectLister, loadProjectFiles projectFilesLoader) htt
 
 		projectList, err := listProjects()
 		if err != nil {
+			log.Printf("failed to load projects: %v", err)
 			http.Error(w, "failed to load projects", http.StatusInternalServerError)
 			return
 		}
@@ -73,6 +74,7 @@ func newMux(listProjects projectLister, loadProjectFiles projectFilesLoader) htt
 				return
 			}
 
+			log.Printf("failed to load project files for %s: %v", projectID, err)
 			http.Error(w, "failed to load project files", http.StatusInternalServerError)
 			return
 		}

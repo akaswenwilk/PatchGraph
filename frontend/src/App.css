@@ -5,9 +5,7 @@
 
 .workspace {
 	min-height: 100vh;
-	padding: 28px 28px 28px 132px;
-	display: flex;
-	align-items: stretch;
+	padding-left: 336px;
 }
 
 .sidebar {
@@ -20,6 +18,7 @@
 	display: flex;
 	flex-direction: column;
 	gap: 16px;
+	overflow: hidden;
 	border: 1px solid rgba(255, 255, 255, 0.14);
 	border-radius: 30px;
 	background:
@@ -110,22 +109,11 @@
 	transform: translateY(1px);
 }
 
-.explorer-panel {
-	width: min(540px, calc(100vw - 184px));
-	min-height: calc(100vh - 56px);
-	padding: 24px;
+.sidebar-content {
+	flex: 1;
 	display: flex;
 	flex-direction: column;
 	gap: 18px;
-	border: 1px solid rgba(255, 255, 255, 0.1);
-	border-radius: 28px;
-	background:
-		linear-gradient(180deg, rgba(24, 28, 35, 0.92), rgba(16, 19, 24, 0.88)),
-		rgba(18, 21, 26, 0.9);
-	box-shadow:
-		0 26px 54px rgba(0, 0, 0, 0.26),
-		inset 0 1px 0 rgba(255, 255, 255, 0.05);
-	backdrop-filter: blur(18px);
 }
 
 .explorer-panel-header h1 {
@@ -149,13 +137,33 @@
 }
 
 .explorer-tree-panel {
-	min-height: 360px;
+	min-height: 0;
 	flex: 1;
 	padding: 14px 10px;
 	border: 1px solid rgba(255, 255, 255, 0.08);
 	border-radius: 22px;
 	background: rgba(255, 255, 255, 0.04);
 	overflow: auto;
+}
+
+@media (max-width: 720px) {
+	.workspace {
+		padding-left: 0;
+	}
+
+	.sidebar {
+		position: relative;
+		top: 0;
+		left: 0;
+		width: calc(100vw - 32px);
+		height: calc(100vh - 32px);
+		margin: 16px;
+	}
+
+	.sidebar-collapsed {
+		width: 64px;
+		height: 64px;
+	}
 }
 
 .tree-list {
