@@ -1,16 +1,23 @@
 services:
   backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     environment:
       PORT: 8080
+      PATCHGRAPH_PROJECTS_ROOT: /projects
     ports:
       - "${PORT:-8080}:8080"
+    volumes:
+      - "${HOME}/projects:/projects:ro"
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    depends_on:
+      - backend
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8080
     ports:
       - "${FRONTEND_PORT:-4173}:4173"

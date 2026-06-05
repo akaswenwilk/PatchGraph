@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY go.mod ./
 COPY cmd ./cmd
+COPY internal ./internal
 
 RUN go build -o /patchgraph-server ./cmd/server
 

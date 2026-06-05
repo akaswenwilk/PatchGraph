@@ -107,6 +107,214 @@
   transform: translateY(1px);
 }
 
+.modal-layer {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 20;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(6, 8, 12, 0.58);
+  backdrop-filter: blur(10px);
+}
+
+.project-modal {
+  position: relative;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(78vh, 720px);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(24, 28, 35, 0.98), rgba(16, 19, 24, 0.96)),
+    rgba(18, 21, 26, 0.96);
+  box-shadow:
+    0 28px 60px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.project-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.project-modal-header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 620;
+}
+
+.project-modal-header p {
+  margin: 8px 0 0;
+  color: rgba(232, 238, 248, 0.72);
+}
+
+.modal-close-button,
+.project-row,
+.secondary-button,
+.primary-button {
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.modal-close-button {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5f7fb;
+  cursor: pointer;
+}
+
+.project-search-field {
+  display: grid;
+  gap: 10px;
+  color: rgba(232, 238, 248, 0.82);
+  font-size: 0.95rem;
+}
+
+.project-search-field span {
+  font-weight: 600;
+}
+
+.project-search-field input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f5f7fb;
+  outline: none;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.project-search-field input:focus {
+  border-color: rgba(124, 172, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(78, 117, 194, 0.24);
+}
+
+.project-search-field input::placeholder {
+  color: rgba(232, 238, 248, 0.42);
+}
+
+.project-results-panel {
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+
+.project-status {
+  margin: auto;
+  padding: 32px 24px;
+  color: rgba(232, 238, 248, 0.72);
+  text-align: center;
+}
+
+.project-status-error {
+  color: #ffb3b3;
+}
+
+.project-list {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.project-row {
+  min-height: 52px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f5f7fb;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    transform 140ms ease,
+    border-color 140ms ease;
+}
+
+.project-row:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.project-row:active {
+  transform: translateY(1px);
+}
+
+.project-row-selected {
+  background: rgba(124, 172, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(124, 172, 255, 0.28);
+}
+
+.project-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.secondary-button,
+.primary-button {
+  min-height: 46px;
+  padding: 0 18px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    transform 140ms ease,
+    opacity 140ms ease;
+}
+
+.secondary-button {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5f7fb;
+}
+
+.primary-button {
+  background: #e8eef8;
+  color: #12161d;
+  font-weight: 650;
+}
+
+.secondary-button:hover,
+.primary-button:hover {
+  transform: translateY(-1px);
+}
+
+.primary-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
 @media (max-width: 640px) {
   .sidebar {
     top: 16px;
@@ -119,5 +327,22 @@
     width: 60px;
     height: 60px;
     padding: 8px;
+  }
+
+  .modal-layer {
+    padding: 16px;
+  }
+
+  .project-modal {
+    padding: 20px;
+    max-height: min(82vh, 720px);
+  }
+
+  .project-results-panel {
+    min-height: 280px;
+  }
+
+  .project-modal-actions {
+    flex-direction: column-reverse;
   }
 }
