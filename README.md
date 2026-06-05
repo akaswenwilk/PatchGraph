@@ -1,17 +1,12 @@
-# PatchGraph Backend
+# PatchGraph
 
-Minimal Go HTTP server scaffold for the PatchGraph backend.
+PatchGraph is organized as a small monorepo:
 
-## Run locally
+- `frontend/` contains the web UI
+- `backend/` contains the Go API
 
-```bash
-go run ./cmd/server
-```
+## Run
 
-The server listens on `PORT` when set, otherwise defaults to `8080`.
+    docker compose up --build
 
-## Run with Docker Compose
-
-```bash
-docker compose up --build
-```
+The backend runs on `http://localhost:8080` and reads projects from your host `~/projects` directory through the compose bind mount at `/projects`.
