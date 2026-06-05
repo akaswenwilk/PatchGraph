@@ -1,29 +1,18 @@
 :root {
   font-family:
     'IBM Plex Sans',
+    'Avenir Next',
     'Segoe UI',
     sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color: #33261e;
+  color: #f5f7fb;
   background:
-    radial-gradient(circle at top, rgba(255, 221, 191, 0.55), transparent 24%),
-    linear-gradient(180deg, #fff9f1 0%, #f7efe4 100%);
+    radial-gradient(circle at top left, rgba(104, 123, 255, 0.14), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(82, 203, 160, 0.1), transparent 22%),
+    linear-gradient(180deg, #0c0f14 0%, #141820 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  --text: #4d3b2f;
-  --heading: #241711;
-  --muted: #765d4d;
-  --border: rgba(89, 55, 37, 0.16);
-  --panel: rgba(255, 252, 247, 0.82);
-  --hover: rgba(232, 93, 63, 0.08);
-  --accent: #cb3d2b;
-  --shadow:
-    0 18px 40px rgba(93, 59, 38, 0.08),
-    0 8px 16px rgba(93, 59, 38, 0.06);
 }
 
 * {
@@ -46,30 +35,4 @@ input,
 textarea,
 select {
   font: inherit;
-}
-
-h1,
-h2,
-h3 {
-  margin: 0;
-  color: var(--heading);
-  line-height: 1.05;
-}
-
-h1 {
-  font-size: clamp(2.5rem, 4vw, 4.5rem);
-  max-width: 12ch;
-}
-
-h2 {
-  font-size: clamp(1.5rem, 2.2vw, 2.25rem);
-  margin-top: 6px;
-}
-
-h3 {
-  font-size: 1.125rem;
-}
-
-p {
-  margin: 0;
 }
