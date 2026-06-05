@@ -74,21 +74,10 @@ function App() {
   const [errorMessage, setErrorMessage] = useState('')
 
   const filteredProjects = filterProjects(projects, query)
-
-  useEffect(() => {
-    if (!isModalOpen) {
-      return
-    }
-
-    if (filteredProjects.length === 0) {
-      setSelectedProject(null)
-      return
-    }
-
-    if (selectedProject === null || !filteredProjects.includes(selectedProject)) {
-      setSelectedProject(filteredProjects[0])
-    }
-  }, [filteredProjects, isModalOpen, selectedProject])
+  const activeProject =
+    selectedProject !== null && filteredProjects.includes(selectedProject)
+      ? selectedProject
+      : (filteredProjects[0] ?? null)
 
   useEffect(() => {
     if (!isModalOpen) {
@@ -215,7 +204,7 @@ function App() {
               {loadState === 'ready' && filteredProjects.length > 0 ? (
                 <div className="project-list" role="listbox" aria-label="Projects">
                   {filteredProjects.map((projectName) => {
-                    const isSelected = projectName === selectedProject
+                    const isSelected = projectName === activeProject
 
                     return (
                       <button
@@ -244,7 +233,7 @@ function App() {
               <button
                 type="button"
                 className="primary-button"
-                disabled={selectedProject === null}
+                disabled={activeProject === null}
                 onClick={() => {}}
               >
                 Open
