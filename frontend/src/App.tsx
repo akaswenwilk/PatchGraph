@@ -9,6 +9,18 @@ type ProjectSummary = {
 	path: string
 }
 
+type ProjectDetail = {
+	id: string
+	name: string
+	path: string
+	files: string[]
+}
+
+type OpenFile = {
+	filename: string
+	lines: string[]
+}
+
 type TreeNode = {
 	name: string
 	path: string
@@ -26,6 +38,21 @@ function isProjectSummary(value: unknown): value is ProjectSummary {
 		typeof candidate.id === 'string' &&
 		typeof candidate.name === 'string' &&
 		typeof candidate.path === 'string'
+	)
+}
+
+function isProjectDetail(value: unknown): value is ProjectDetail {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		typeof candidate.id === 'string' &&
+		typeof candidate.name === 'string' &&
+		typeof candidate.path === 'string' &&
+		Array.isArray(candidate.files) &&
+		candidate.files.every((entry) => typeof entry === 'string')
 	)
 }
 
@@ -160,22 +187,33 @@ function TreeBranch({
 	node,
 	depth,
 	expandedPaths,
+	activeFilename,
 	onToggle,
+	onFileOpen,
 }: {
 	node: TreeNode
 	depth: number
 	expandedPaths: Set<string>
+	activeFilename: string | null
 	onToggle: (path: string) => void
+	onFileOpen: (path: string) => void
 }) {
 	if (node.kind === 'file') {
+		const isSelected = node.path === activeFilename
+
 		return (
 			<li className="tree-item">
-				<div className="tree-row tree-file" style={{ paddingLeft: `${depth * 18 + 14}px` }}>
+				<button
+					type="button"
+					className={isSelected ? 'tree-row tree-file tree-file-selected' : 'tree-row tree-file'}
+					style={{ paddingLeft: `${depth * 18 + 14}px` }}
+					onClick={() => onFileOpen(node.path)}
+				>
 					<span className="tree-file-bullet" aria-hidden="true">
 						•
 					</span>
 					<span className="tree-label">{node.name}</span>
-				</div>
+				</button>
 			</li>
 		)
 	}
@@ -201,7 +239,9 @@ function TreeBranch({
 							node={child}
 							depth={depth + 1}
 							expandedPaths={expandedPaths}
+							activeFilename={activeFilename}
 							onToggle={onToggle}
+							onFileOpen={onFileOpen}
 						/>
 					))}
 				</ul>
@@ -216,16 +256,20 @@ function App() {
 	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
 	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
-	const [projectLoadState, setProjectLoadState] = useState<LoadState>('idle')
-	const [projectErrorMessage, setProjectErrorMessage] = useState('')
-	const [openedProject, setOpenedProject] = useState<ProjectSummary | null>(null)
-	const [fileLoadState, setFileLoadState] = useState<LoadState>('idle')
-	const [fileErrorMessage, setFileErrorMessage] = useState('')
+	const [projectPickerState, setProjectPickerState] = useState<LoadState>('idle')
+	const [projectPickerError, setProjectPickerError] = useState('')
+	const [projectState, setProjectState] = useState<LoadState>('idle')
+	const [projectError, setProjectError] = useState('')
+	const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null)
 	const [fileTree, setFileTree] = useState<TreeNode | null>(null)
 	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
+	const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+	const [fileState, setFileState] = useState<LoadState>('idle')
+	const [fileError, setFileError] = useState('')
+	const [activeFilename, setActiveFilename] = useState<string | null>(null)
 
 	const filteredProjects = filterProjects(projects, query)
-	const activeProject =
+	const highlightedProject =
 		selectedProjectID !== null
 			? filteredProjects.find((project) => project.id === selectedProjectID) ?? (filteredProjects[0] ?? null)
 			: (filteredProjects[0] ?? null)
@@ -249,8 +293,8 @@ function App() {
 		setIsModalOpen(true)
 		setQuery('')
 		setSelectedProjectID(null)
-		setProjectLoadState('loading')
-		setProjectErrorMessage('')
+		setProjectPickerState('loading')
+		setProjectPickerError('')
 
 		try {
 			const response = await fetch('/api/projects')
@@ -273,45 +317,88 @@ function App() {
 			})
 			setProjects(nextProjects)
 			setSelectedProjectID(nextProjects[0]?.id ?? null)
-			setProjectLoadState('ready')
+			setProjectPickerState('ready')
 		} catch (error) {
 			setProjects([])
 			setSelectedProjectID(null)
-			setProjectLoadState('error')
-			setProjectErrorMessage(error instanceof Error ? error.message : 'Unknown error')
+			setProjectPickerState('error')
+			setProjectPickerError(error instanceof Error ? error.message : 'Unknown error')
 		}
 	}
 
-	async function openSelectedProject() {
+	async function handleProjectOpen() {
+		if (highlightedProject === null) {
+			return
+		}
+
+		setProjectState('loading')
+		setProjectError('')
+		setFileState('idle')
+		setFileError('')
+		setOpenFile(null)
+		setActiveFilename(null)
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(highlightedProject.id)}`)
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			if (!isProjectDetail(data)) {
+				throw new Error('Project response was invalid')
+			}
+
+			const project = {
+				...data,
+				files: [...data.files].sort((left, right) => left.localeCompare(right)),
+			}
+			setActiveProject(project)
+			setFileTree(buildTree(project.files))
+			setExpandedPaths(new Set([project.id]))
+			setProjectState('ready')
+			setIsModalOpen(false)
+		} catch (error) {
+			setActiveProject(null)
+			setFileTree(null)
+			setExpandedPaths(new Set())
+			setProjectState('error')
+			setProjectError(error instanceof Error ? error.message : 'Unknown error')
+		}
+	}
+
+	async function handleFileOpen(filename: string) {
 		if (activeProject === null) {
 			return
 		}
 
-		setFileLoadState('loading')
-		setFileErrorMessage('')
+		setActiveFilename(filename)
+		setFileState('loading')
+		setFileError('')
 
 		try {
-			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/files`)
+			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/files`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({ filename }),
+			})
 			if (!response.ok) {
 				throw new Error(`Request failed with status ${response.status}`)
 			}
 
 			const data: unknown = await response.json()
 			if (!Array.isArray(data) || data.some((entry) => typeof entry !== 'string')) {
-				throw new Error('Files response was not a string array')
+				throw new Error('File response was not a string array')
 			}
 
-			const nextFileTree = buildTree(data)
-			setOpenedProject(activeProject)
-			setFileTree(nextFileTree)
-			setExpandedPaths(new Set([activeProject.id]))
-			setFileLoadState('ready')
-			setIsModalOpen(false)
+			setOpenFile({ filename, lines: data })
+			setFileState('ready')
 		} catch (error) {
-			setFileTree(null)
-			setOpenedProject(activeProject)
-			setFileLoadState('error')
-			setFileErrorMessage(error instanceof Error ? error.message : 'Unknown error')
+			setOpenFile(null)
+			setFileState('error')
+			setFileError(error instanceof Error ? error.message : 'Unknown error')
 		}
 	}
 
@@ -349,37 +436,39 @@ function App() {
 							<div className="explorer-panel-header">
 								<div>
 									<p className="explorer-eyebrow">Explorer</p>
-									<h1>{openedProject?.name ?? 'No repo opened'}</h1>
+									<h1>{activeProject?.name ?? 'No repo opened'}</h1>
 									<p className="explorer-subtitle">
-										{openedProject?.path ?? 'Choose a repo to load its file tree.'}
+										{activeProject?.path ?? 'Choose a repo to load its file tree.'}
 									</p>
 								</div>
 							</div>
 
 							<div className="explorer-tree-panel">
-								{fileLoadState === 'idle' ? (
+								{projectState === 'idle' ? (
 									<p className="project-status">Open a repo to load files.</p>
 								) : null}
-								{fileLoadState === 'loading' ? (
+								{projectState === 'loading' ? (
 									<p className="project-status">Loading files…</p>
 								) : null}
-								{fileLoadState === 'error' ? (
+								{projectState === 'error' ? (
 									<p className="project-status project-status-error">
-										Could not load files. {fileErrorMessage}
+										Could not load files. {projectError}
 									</p>
 								) : null}
-								{fileLoadState === 'ready' && openedProject !== null && fileTree !== null ? (
+								{projectState === 'ready' && activeProject !== null && fileTree !== null ? (
 									<ul className="tree-list">
 										<TreeBranch
 											node={{
-												name: openedProject.name,
-												path: openedProject.id,
+												name: activeProject.name,
+												path: activeProject.id,
 												kind: 'directory',
 												children: fileTree.children,
 											}}
 											depth={0}
 											expandedPaths={expandedPaths}
+											activeFilename={activeFilename}
 											onToggle={togglePath}
+											onFileOpen={(path) => void handleFileOpen(path)}
 										/>
 									</ul>
 								) : null}
@@ -387,13 +476,62 @@ function App() {
 						</div>
 
 						<button type="button" className="open-project-button" onClick={openProjectPicker}>
-							{openedProject === null ? 'Open Repo' : 'Switch Repo'}
+							{activeProject === null ? 'Open Repo' : 'Switch Repo'}
 						</button>
 					</>
 				) : null}
 			</aside>
 
-			<main className="workspace" aria-hidden="true" />
+			<main className="workspace">
+				<section className="file-window" aria-label="File viewer">
+					{activeProject === null ? (
+						<div className="workspace-placeholder">
+							<p className="workspace-eyebrow">PatchGraph</p>
+							<h2>No file open</h2>
+							<p>Open a repo, then choose a file from the explorer.</p>
+						</div>
+					) : fileState === 'loading' ? (
+						<div className="workspace-placeholder">
+							<p className="workspace-eyebrow">Opening file</p>
+							<h2>{activeFilename}</h2>
+							<p>Loading file contents…</p>
+						</div>
+					) : fileState === 'error' ? (
+						<div className="workspace-placeholder workspace-placeholder-error">
+							<p className="workspace-eyebrow">File error</p>
+							<h2>{activeFilename ?? 'Could not open file'}</h2>
+							<p>{fileError}</p>
+						</div>
+					) : openFile !== null ? (
+						<>
+							<header className="file-window-header">
+								<div>
+									<p className="workspace-eyebrow">{activeProject.name}</p>
+									<h2>{openFile.filename}</h2>
+								</div>
+								<p>{openFile.lines.length} lines</p>
+							</header>
+
+							<div className="file-code-scroll">
+								<div className="file-code" role="presentation">
+									{openFile.lines.map((line, index) => (
+										<div className="code-row" key={`${openFile.filename}:${index + 1}`}>
+											<span className="line-number">{index + 1}</span>
+											<span className="line-content">{line === '' ? ' ' : line}</span>
+										</div>
+									))}
+								</div>
+							</div>
+						</>
+					) : (
+						<div className="workspace-placeholder">
+							<p className="workspace-eyebrow">{activeProject.name}</p>
+							<h2>Select a file</h2>
+							<p>The first viewer window will open here.</p>
+						</div>
+					)}
+				</section>
+			</main>
 
 			{isModalOpen ? (
 				<div className="modal-layer" role="presentation">
@@ -438,21 +576,21 @@ function App() {
 						</label>
 
 						<div className="project-results-panel">
-							{projectLoadState === 'loading' ? (
+							{projectPickerState === 'loading' ? (
 								<p className="project-status">Loading projects…</p>
 							) : null}
-							{projectLoadState === 'error' ? (
+							{projectPickerState === 'error' ? (
 								<p className="project-status project-status-error">
-									Could not load projects. {projectErrorMessage}
+									Could not load projects. {projectPickerError}
 								</p>
 							) : null}
-							{projectLoadState === 'ready' && filteredProjects.length === 0 ? (
+							{projectPickerState === 'ready' && filteredProjects.length === 0 ? (
 								<p className="project-status">No matching repos.</p>
 							) : null}
-							{projectLoadState === 'ready' && filteredProjects.length > 0 ? (
+							{projectPickerState === 'ready' && filteredProjects.length > 0 ? (
 								<div className="project-list" role="listbox" aria-label="Projects">
 									{filteredProjects.map((project) => {
-										const isSelected = project.id === activeProject?.id
+										const isSelected = project.id === highlightedProject?.id
 
 										return (
 											<button
@@ -463,6 +601,7 @@ function App() {
 												}
 												aria-selected={isSelected}
 												onClick={() => setSelectedProjectID(project.id)}
+												onDoubleClick={() => void handleProjectOpen()}
 											>
 												<span className="project-row-name">{project.name}</span>
 												<span className="project-row-path">{project.path}</span>
@@ -484,8 +623,8 @@ function App() {
 							<button
 								type="button"
 								className="primary-button"
-								disabled={activeProject === null}
-								onClick={openSelectedProject}
+								disabled={highlightedProject === null}
+								onClick={() => void handleProjectOpen()}
 							>
 								Open
 							</button>

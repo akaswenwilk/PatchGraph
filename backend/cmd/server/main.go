@@ -3,17 +3,16 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
 	"github.com/akaswenwilk/PatchGraph/backend/internal/projects"
 )
-
-type projectLister func() ([]projects.Project, error)
-type projectFilesLoader func(projectID string) ([]string, error)
 
 func main() {
 	port := os.Getenv("PORT")
@@ -23,7 +22,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":" + port,
-		Handler: newMux(projectsHandler, projectFilesHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -32,7 +31,38 @@ func main() {
 	}
 }
 
-func newMux(listProjects projectLister, loadProjectFiles projectFilesLoader) http.Handler {
+func projectsHandler() ([]projects.Project, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return projects.Discover(root)
+}
+
+func projectHandler(projectID string) (projects.Detail, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return projects.Detail{}, err
+	}
+
+	return projects.Get(root, projectID)
+}
+
+func fileHandler(projectID string, filename string) ([]string, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return projects.ReadFileLines(root, projectID, filename)
+}
+
+func newMux(
+	listProjects func() ([]projects.Project, error),
+	getProject func(string) (projects.Detail, error),
+	readFile func(string, string) ([]string, error),
+) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -55,74 +85,85 @@ func newMux(listProjects projectLister, loadProjectFiles projectFilesLoader) htt
 		writeJSON(w, projectList)
 	})
 	mux.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		projectID, ok := projectIDFromFilesRoute(r.URL.Path)
+		projectID, remainder, ok := parseProjectPath(r.URL.Path)
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
 
-		files, err := loadProjectFiles(projectID)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				http.Error(w, "project not found", http.StatusNotFound)
-				return
-			}
-
-			log.Printf("failed to load project files for %s: %v", projectID, err)
-			http.Error(w, "failed to load project files", http.StatusInternalServerError)
-			return
+		switch {
+		case remainder == "" && r.Method == http.MethodGet:
+			writeProjectResponse(w, projectID, getProject)
+		case remainder == "files" && r.Method == http.MethodPost:
+			writeFileResponse(w, r, projectID, readFile)
+		case remainder == "":
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		case remainder == "files":
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		default:
+			http.NotFound(w, r)
 		}
-
-		writeJSON(w, files)
 	})
 
 	return mux
 }
 
-func projectsHandler() ([]projects.Project, error) {
-	root, err := projects.RootFromEnv()
+func writeProjectResponse(w http.ResponseWriter, projectID string, getProject func(string) (projects.Detail, error)) {
+	detail, err := getProject(projectID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, fs.ErrNotExist) {
+			http.Error(w, "project not found", http.StatusNotFound)
+			return
+		}
+
+		log.Printf("failed to load project %s: %v", projectID, err)
+		http.Error(w, "failed to load project", http.StatusInternalServerError)
+		return
 	}
 
-	return projects.Discover(root)
+	writeJSON(w, detail)
 }
 
-func projectFilesHandler(projectID string) ([]string, error) {
-	root, err := projects.RootFromEnv()
+func writeFileResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID string,
+	readFile func(string, string) ([]string, error),
+) {
+	defer r.Body.Close()
+
+	var request struct {
+		Filename string `json:"filename"`
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	lines, err := readFile(projectID, request.Filename)
 	if err != nil {
-		return nil, err
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			http.Error(w, "file not found", http.StatusNotFound)
+		case errors.Is(err, projects.ErrInvalidFilePath), errors.Is(err, projects.ErrFileOutsideProject):
+			http.Error(w, "file not found", http.StatusNotFound)
+		default:
+			log.Printf("failed to read file %s in project %s: %v", request.Filename, projectID, err)
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+		}
+		return
 	}
 
-	project, err := projects.FindByID(root, projectID)
-	if err != nil {
-		return nil, err
-	}
-
-	return projects.ListFiles(project)
-}
-
-func projectIDFromFilesRoute(path string) (string, bool) {
-	const prefix = "/api/projects/"
-	const suffix = "/files"
-
-	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
-		return "", false
-	}
-
-	projectID := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
-	projectID = strings.Trim(projectID, "/")
-	if projectID == "" || strings.Contains(projectID, "/") {
-		return "", false
-	}
-
-	return projectID, true
+	writeJSON(w, lines)
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
@@ -130,4 +171,35 @@ func writeJSON(w http.ResponseWriter, value any) {
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 	}
+}
+
+func parseProjectPath(path string) (string, string, bool) {
+	const prefix = "/api/projects/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+
+	trimmed := strings.TrimPrefix(path, prefix)
+	if trimmed == "" {
+		return "", "", false
+	}
+
+	parts := strings.Split(trimmed, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", "", false
+	}
+
+	projectID, err := url.PathUnescape(parts[0])
+	if err != nil || projectID == "" {
+		return "", "", false
+	}
+
+	if len(parts) == 1 {
+		return projectID, "", true
+	}
+	if len(parts) == 2 && parts[1] != "" {
+		return projectID, parts[1], true
+	}
+
+	return "", "", false
 }
