@@ -416,17 +416,34 @@ function App() {
 		setFileError('')
 	}
 
-	function startViewerResize(direction: 'horizontal' | 'vertical' | 'both') {
+	function startViewerResize(
+		direction: 'horizontal' | 'vertical' | 'both',
+		event: React.PointerEvent<HTMLButtonElement>,
+	) {
+		event.preventDefault()
+		event.stopPropagation()
+
 		const fileWindow = fileWindowRef.current
 		if (fileWindow === null) {
 			return
 		}
+
+		event.currentTarget.setPointerCapture(event.pointerId)
 
 		const rect = fileWindow.getBoundingClientRect()
 		const minWidth = 320
 		const minHeight = 280
 		const maxWidth = Math.max(minWidth, rect.right - 24)
 		const maxHeight = Math.max(minHeight, window.innerHeight - rect.top - 24)
+		const previousUserSelect = document.body.style.userSelect
+		const previousCursor = document.body.style.cursor
+		document.body.style.userSelect = 'none'
+		document.body.style.cursor =
+			direction === 'horizontal'
+				? 'ew-resize'
+				: direction === 'vertical'
+					? 'ns-resize'
+					: 'nwse-resize'
 
 		setViewerSize({
 			width: rect.width,
@@ -461,6 +478,8 @@ function App() {
 		const handlePointerUp = () => {
 			window.removeEventListener('pointermove', handlePointerMove)
 			window.removeEventListener('pointerup', handlePointerUp)
+			document.body.style.userSelect = previousUserSelect
+			document.body.style.cursor = previousCursor
 		}
 
 		window.addEventListener('pointermove', handlePointerMove)
@@ -569,19 +588,19 @@ function App() {
 							type="button"
 							className="file-window-resize-handle file-window-resize-handle-right"
 							aria-label="Resize file viewer width"
-							onPointerDown={() => startViewerResize('horizontal')}
+							onPointerDown={(event) => startViewerResize('horizontal', event)}
 						/>
 						<button
 							type="button"
 							className="file-window-resize-handle file-window-resize-handle-bottom"
 							aria-label="Resize file viewer height"
-							onPointerDown={() => startViewerResize('vertical')}
+							onPointerDown={(event) => startViewerResize('vertical', event)}
 						/>
 						<button
 							type="button"
 							className="file-window-resize-handle file-window-resize-handle-corner"
 							aria-label="Resize file viewer"
-							onPointerDown={() => startViewerResize('both')}
+							onPointerDown={(event) => startViewerResize('both', event)}
 						/>
 					</section>
 				) : fileState === 'error' ? (
@@ -605,19 +624,19 @@ function App() {
 							type="button"
 							className="file-window-resize-handle file-window-resize-handle-right"
 							aria-label="Resize file viewer width"
-							onPointerDown={() => startViewerResize('horizontal')}
+							onPointerDown={(event) => startViewerResize('horizontal', event)}
 						/>
 						<button
 							type="button"
 							className="file-window-resize-handle file-window-resize-handle-bottom"
 							aria-label="Resize file viewer height"
-							onPointerDown={() => startViewerResize('vertical')}
+							onPointerDown={(event) => startViewerResize('vertical', event)}
 						/>
 						<button
 							type="button"
 							className="file-window-resize-handle file-window-resize-handle-corner"
 							aria-label="Resize file viewer"
-							onPointerDown={() => startViewerResize('both')}
+							onPointerDown={(event) => startViewerResize('both', event)}
 						/>
 					</section>
 				) : openFile !== null && activeProject !== null ? (
@@ -666,19 +685,19 @@ function App() {
 								type="button"
 								className="file-window-resize-handle file-window-resize-handle-right"
 								aria-label="Resize file viewer width"
-								onPointerDown={() => startViewerResize('horizontal')}
+								onPointerDown={(event) => startViewerResize('horizontal', event)}
 							/>
 							<button
 								type="button"
 								className="file-window-resize-handle file-window-resize-handle-bottom"
 								aria-label="Resize file viewer height"
-								onPointerDown={() => startViewerResize('vertical')}
+								onPointerDown={(event) => startViewerResize('vertical', event)}
 							/>
 							<button
 								type="button"
 								className="file-window-resize-handle file-window-resize-handle-corner"
 								aria-label="Resize file viewer"
-								onPointerDown={() => startViewerResize('both')}
+								onPointerDown={(event) => startViewerResize('both', event)}
 							/>
 						</>
 					</section>

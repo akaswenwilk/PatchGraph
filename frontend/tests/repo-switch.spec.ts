@@ -43,3 +43,61 @@ test('selecting a file opens its contents in the viewer', async ({ page }) => {
 	await expect(page.getByText('1 lines')).toBeVisible()
 	await expect(page.getByRole('heading', { name: 'No file open' })).not.toBeVisible()
 })
+
+test('resizing the file viewer changes its size without changing code text size', async ({
+	page,
+}) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /base\.txt/ }).click()
+
+	const viewer = page.getByRole('region', { name: 'File viewer' })
+	const codeLine = page.locator('.code-row').first().locator('.line-content')
+	const resizeHandle = page.getByRole('button', {
+		name: 'Resize file viewer',
+		exact: true,
+	})
+
+	await expect(viewer).toBeVisible()
+	await viewer.hover()
+
+	const beforeBox = await viewer.boundingBox()
+	if (beforeBox === null) {
+		throw new Error('Expected file viewer bounding box')
+	}
+
+	const beforeFontSize = await codeLine.evaluate(
+		(element) => window.getComputedStyle(element).fontSize,
+	)
+	const handleBox = await resizeHandle.boundingBox()
+	if (handleBox === null) {
+		throw new Error('Expected resize handle bounding box')
+	}
+
+	await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+	await page.mouse.down()
+	await page.mouse.move(handleBox.x + handleBox.width / 2 + 120, handleBox.y + handleBox.height / 2 + 80, {
+		steps: 12,
+	})
+	await page.mouse.up()
+
+	await expect
+		.poll(() =>
+			page.evaluate(() => window.getSelection?.()?.toString() ?? ''),
+		)
+		.toBe('')
+
+	const afterBox = await viewer.boundingBox()
+	if (afterBox === null) {
+		throw new Error('Expected resized file viewer bounding box')
+	}
+
+	expect(afterBox.width).toBeGreaterThan(beforeBox.width + 40)
+	expect(afterBox.height).toBeGreaterThan(beforeBox.height + 40)
+	await expect
+		.poll(() =>
+			codeLine.evaluate((element) => window.getComputedStyle(element).fontSize),
+		)
+		.toBe(beforeFontSize)
+})
