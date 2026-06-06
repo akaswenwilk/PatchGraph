@@ -476,7 +476,7 @@ function App() {
 						</div>
 
 						<button type="button" className="open-project-button" onClick={openProjectPicker}>
-							{activeProject === null ? 'Open Repo' : 'Open Another Repo'}
+							{activeProject === null ? 'Open Repo' : 'Switch Repo'}
 						</button>
 					</>
 				) : null}
