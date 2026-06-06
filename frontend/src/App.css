@@ -148,7 +148,10 @@
 }
 
 .file-window {
+	position: relative;
 	height: min(78vh, calc(100vh - 48px));
+	width: 100%;
+	max-width: calc(100vw - 384px);
 	display: flex;
 	flex-direction: column;
 	border: 1px solid rgba(255, 255, 255, 0.12);
@@ -162,13 +165,95 @@
 	overflow: hidden;
 }
 
+.file-window-resize-handle {
+	position: absolute;
+	border: 0;
+	padding: 0;
+	background: transparent;
+	opacity: 0;
+	cursor: default;
+}
+
+.file-window:hover .file-window-resize-handle,
+.file-window-resize-handle:focus-visible {
+	opacity: 1;
+}
+
+.file-window-resize-handle::after {
+	content: '';
+	position: absolute;
+	background: rgba(124, 172, 255, 0.72);
+	border-radius: 999px;
+	transition: opacity 140ms ease;
+	opacity: 0.32;
+}
+
+.file-window-resize-handle:hover::after,
+.file-window-resize-handle:focus-visible::after {
+	opacity: 1;
+}
+
+.file-window-resize-handle-right {
+	top: 18px;
+	right: -6px;
+	bottom: 18px;
+	width: 12px;
+	cursor: ew-resize;
+}
+
+.file-window-resize-handle-right::after {
+	top: 12px;
+	right: 4px;
+	bottom: 12px;
+	width: 2px;
+}
+
+.file-window-resize-handle-bottom {
+	right: 18px;
+	bottom: -6px;
+	left: 18px;
+	height: 12px;
+	cursor: ns-resize;
+}
+
+.file-window-resize-handle-bottom::after {
+	right: 12px;
+	bottom: 4px;
+	left: 12px;
+	height: 2px;
+}
+
+.file-window-resize-handle-corner {
+	right: -6px;
+	bottom: -6px;
+	width: 18px;
+	height: 18px;
+	cursor: nwse-resize;
+}
+
+.file-window-resize-handle-corner::after {
+	right: 4px;
+	bottom: 4px;
+	width: 10px;
+	height: 10px;
+}
+
 .file-window-header {
 	padding: 22px 24px 18px;
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.file-window-title-group {
 	display: flex;
 	align-items: flex-end;
 	justify-content: space-between;
 	gap: 16px;
-	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	min-width: 0;
+	flex: 1;
 }
 
 .file-window-header h2,
@@ -367,6 +452,7 @@
 }
 
 .modal-close-button,
+.file-window-close-button,
 .project-row,
 .secondary-button,
 .primary-button {
@@ -385,6 +471,32 @@
 	background: rgba(255, 255, 255, 0.08);
 	color: #f5f7fb;
 	cursor: pointer;
+}
+
+.file-window-close-button {
+	width: 40px;
+	height: 40px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	border-radius: 14px;
+	background: rgba(255, 255, 255, 0.08);
+	color: #f5f7fb;
+	cursor: pointer;
+	transition:
+		background 140ms ease,
+		transform 140ms ease;
+}
+
+.file-window-close-button:hover,
+.modal-close-button:hover {
+	background: rgba(255, 255, 255, 0.14);
+}
+
+.file-window-close-button:active,
+.modal-close-button:active {
+	transform: translateY(1px);
 }
 
 .project-search-field {

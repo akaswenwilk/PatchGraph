@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
@@ -19,6 +19,11 @@ type ProjectDetail = {
 type OpenFile = {
 	filename: string
 	lines: string[]
+}
+
+type ViewerSize = {
+	width: number
+	height: number
 }
 
 type TreeNode = {
@@ -267,6 +272,8 @@ function App() {
 	const [fileState, setFileState] = useState<LoadState>('idle')
 	const [fileError, setFileError] = useState('')
 	const [activeFilename, setActiveFilename] = useState<string | null>(null)
+	const [viewerSize, setViewerSize] = useState<ViewerSize | null>(null)
+	const fileWindowRef = useRef<HTMLElement | null>(null)
 
 	const filteredProjects = filterProjects(projects, query)
 	const highlightedProject =
@@ -402,6 +409,64 @@ function App() {
 		}
 	}
 
+	function closeFileWindow() {
+		setOpenFile(null)
+		setActiveFilename(null)
+		setFileState('idle')
+		setFileError('')
+	}
+
+	function startViewerResize(direction: 'horizontal' | 'vertical' | 'both') {
+		const fileWindow = fileWindowRef.current
+		if (fileWindow === null) {
+			return
+		}
+
+		const rect = fileWindow.getBoundingClientRect()
+		const minWidth = 320
+		const minHeight = 280
+		const maxWidth = Math.max(minWidth, rect.right - 24)
+		const maxHeight = Math.max(minHeight, window.innerHeight - rect.top - 24)
+
+		setViewerSize({
+			width: rect.width,
+			height: rect.height,
+		})
+
+		const handlePointerMove = (event: PointerEvent) => {
+			setViewerSize((current) => {
+				const next = current ?? { width: rect.width, height: rect.height }
+				const nextWidth =
+					direction === 'vertical'
+						? next.width
+						: Math.min(
+								maxWidth,
+								Math.max(minWidth, event.clientX - rect.left),
+							)
+				const nextHeight =
+					direction === 'horizontal'
+						? next.height
+						: Math.min(
+								maxHeight,
+								Math.max(minHeight, event.clientY - rect.top),
+							)
+
+				return {
+					width: nextWidth,
+					height: nextHeight,
+				}
+			})
+		}
+
+		const handlePointerUp = () => {
+			window.removeEventListener('pointermove', handlePointerMove)
+			window.removeEventListener('pointerup', handlePointerUp)
+		}
+
+		window.addEventListener('pointermove', handlePointerMove)
+		window.addEventListener('pointerup', handlePointerUp)
+	}
+
 	function togglePath(path: string) {
 		setExpandedPaths((current) => {
 			const next = new Set(current)
@@ -484,30 +549,106 @@ function App() {
 
 			<main className="workspace">
 				{fileState === 'loading' ? (
-					<section className="file-window" aria-label="File viewer">
+					<section
+						ref={fileWindowRef}
+						className="file-window"
+						aria-label="File viewer"
+							style={
+								viewerSize === null
+									? undefined
+									: { width: viewerSize.width + 'px', height: viewerSize.height + 'px' }
+							}
+					>
 						<div className="workspace-placeholder">
 							<p className="workspace-eyebrow">Opening file</p>
 							<h2>{activeFilename}</h2>
 							<p>Loading file contents…</p>
 						</div>
+
+						<button
+							type="button"
+							className="file-window-resize-handle file-window-resize-handle-right"
+							aria-label="Resize file viewer width"
+							onPointerDown={() => startViewerResize('horizontal')}
+						/>
+						<button
+							type="button"
+							className="file-window-resize-handle file-window-resize-handle-bottom"
+							aria-label="Resize file viewer height"
+							onPointerDown={() => startViewerResize('vertical')}
+						/>
+						<button
+							type="button"
+							className="file-window-resize-handle file-window-resize-handle-corner"
+							aria-label="Resize file viewer"
+							onPointerDown={() => startViewerResize('both')}
+						/>
 					</section>
 				) : fileState === 'error' ? (
-					<section className="file-window" aria-label="File viewer">
+					<section
+						ref={fileWindowRef}
+						className="file-window"
+						aria-label="File viewer"
+							style={
+								viewerSize === null
+									? undefined
+									: { width: viewerSize.width + 'px', height: viewerSize.height + 'px' }
+							}
+					>
 						<div className="workspace-placeholder workspace-placeholder-error">
 							<p className="workspace-eyebrow">File error</p>
 							<h2>{activeFilename ?? 'Could not open file'}</h2>
 							<p>{fileError}</p>
 						</div>
+
+						<button
+							type="button"
+							className="file-window-resize-handle file-window-resize-handle-right"
+							aria-label="Resize file viewer width"
+							onPointerDown={() => startViewerResize('horizontal')}
+						/>
+						<button
+							type="button"
+							className="file-window-resize-handle file-window-resize-handle-bottom"
+							aria-label="Resize file viewer height"
+							onPointerDown={() => startViewerResize('vertical')}
+						/>
+						<button
+							type="button"
+							className="file-window-resize-handle file-window-resize-handle-corner"
+							aria-label="Resize file viewer"
+							onPointerDown={() => startViewerResize('both')}
+						/>
 					</section>
 				) : openFile !== null && activeProject !== null ? (
-					<section className="file-window" aria-label="File viewer">
+					<section
+						ref={fileWindowRef}
+						className="file-window"
+						aria-label="File viewer"
+							style={
+								viewerSize === null
+									? undefined
+									: { width: viewerSize.width + 'px', height: viewerSize.height + 'px' }
+							}
+					>
 						<>
 							<header className="file-window-header">
-								<div>
-									<p className="workspace-eyebrow">{activeProject.name}</p>
-									<h2>{openFile.filename}</h2>
+								<div className="file-window-title-group">
+									<div>
+										<p className="workspace-eyebrow">{activeProject.name}</p>
+										<h2>{openFile.filename}</h2>
+									</div>
+									<p>{openFile.lines.length} lines</p>
 								</div>
-								<p>{openFile.lines.length} lines</p>
+
+								<button
+									type="button"
+									className="file-window-close-button"
+									aria-label="Close file viewer"
+									onClick={closeFileWindow}
+								>
+									×
+								</button>
 							</header>
 
 							<div className="file-code-scroll">
@@ -520,6 +661,25 @@ function App() {
 									))}
 								</div>
 							</div>
+
+							<button
+								type="button"
+								className="file-window-resize-handle file-window-resize-handle-right"
+								aria-label="Resize file viewer width"
+								onPointerDown={() => startViewerResize('horizontal')}
+							/>
+							<button
+								type="button"
+								className="file-window-resize-handle file-window-resize-handle-bottom"
+								aria-label="Resize file viewer height"
+								onPointerDown={() => startViewerResize('vertical')}
+							/>
+							<button
+								type="button"
+								className="file-window-resize-handle file-window-resize-handle-corner"
+								aria-label="Resize file viewer"
+								onPointerDown={() => startViewerResize('both')}
+							/>
 						</>
 					</section>
 				) : null}
