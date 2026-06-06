@@ -483,26 +483,24 @@ function App() {
 			</aside>
 
 			<main className="workspace">
-				<section className="file-window" aria-label="File viewer">
-					{activeProject === null ? (
-						<div className="workspace-placeholder">
-							<p className="workspace-eyebrow">PatchGraph</p>
-							<h2>No file open</h2>
-							<p>Open a repo, then choose a file from the explorer.</p>
-						</div>
-					) : fileState === 'loading' ? (
+				{fileState === 'loading' ? (
+					<section className="file-window" aria-label="File viewer">
 						<div className="workspace-placeholder">
 							<p className="workspace-eyebrow">Opening file</p>
 							<h2>{activeFilename}</h2>
 							<p>Loading file contents…</p>
 						</div>
-					) : fileState === 'error' ? (
+					</section>
+				) : fileState === 'error' ? (
+					<section className="file-window" aria-label="File viewer">
 						<div className="workspace-placeholder workspace-placeholder-error">
 							<p className="workspace-eyebrow">File error</p>
 							<h2>{activeFilename ?? 'Could not open file'}</h2>
 							<p>{fileError}</p>
 						</div>
-					) : openFile !== null ? (
+					</section>
+				) : openFile !== null && activeProject !== null ? (
+					<section className="file-window" aria-label="File viewer">
 						<>
 							<header className="file-window-header">
 								<div>
@@ -523,14 +521,8 @@ function App() {
 								</div>
 							</div>
 						</>
-					) : (
-						<div className="workspace-placeholder">
-							<p className="workspace-eyebrow">{activeProject.name}</p>
-							<h2>Select a file</h2>
-							<p>The first viewer window will open here.</p>
-						</div>
-					)}
-				</section>
+					</section>
+				) : null}
 			</main>
 
 			{isModalOpen ? (
