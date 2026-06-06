@@ -13,12 +13,27 @@ type OpenFile = {
 	lines: string[]
 }
 
+type TreeNode = {
+	name: string
+	path: string
+	kind: 'directory' | 'file'
+	children: TreeNode[]
+}
+
 function MenuIcon() {
 	return (
 		<span className="menu-icon" aria-hidden="true">
 			<span />
 			<span />
 			<span />
+		</span>
+	)
+}
+
+function FolderIcon({ isOpen }: { isOpen: boolean }) {
+	return (
+		<span className={isOpen ? 'tree-icon tree-icon-open' : 'tree-icon'}>
+			{isOpen ? '▾' : '▸'}
 		</span>
 	)
 }
@@ -74,6 +89,123 @@ function filterProjects(projects: string[], query: string) {
 		.map((entry) => entry.projectName)
 }
 
+function buildTree(filePaths: string[]): TreeNode {
+	const root: TreeNode = {
+		name: '',
+		path: '',
+		kind: 'directory',
+		children: [],
+	}
+
+	for (const filePath of filePaths) {
+		const segments = filePath.split('/').filter(Boolean)
+		let current = root
+
+		for (let index = 0; index < segments.length; index += 1) {
+			const segment = segments[index]
+			const nodePath = current.path === '' ? segment : `${current.path}/${segment}`
+			const isFile = index === segments.length - 1
+			let child = current.children.find((entry) => entry.path === nodePath)
+
+			if (!child) {
+				child = {
+					name: segment,
+					path: nodePath,
+					kind: isFile ? 'file' : 'directory',
+					children: [],
+				}
+				current.children.push(child)
+			}
+
+			current = child
+		}
+	}
+
+	const sortNode = (node: TreeNode) => {
+		node.children.sort((left, right) => {
+			if (left.kind !== right.kind) {
+				return left.kind === 'directory' ? -1 : 1
+			}
+
+			return left.name.localeCompare(right.name)
+		})
+
+		for (const child of node.children) {
+			sortNode(child)
+		}
+	}
+
+	sortNode(root)
+	return root
+}
+
+function TreeBranch({
+	node,
+	depth,
+	expandedPaths,
+	activeFilename,
+	onToggle,
+	onFileOpen,
+}: {
+	node: TreeNode
+	depth: number
+	expandedPaths: Set<string>
+	activeFilename: string | null
+	onToggle: (path: string) => void
+	onFileOpen: (path: string) => void
+}) {
+	if (node.kind === 'file') {
+		const isSelected = node.path === activeFilename
+
+		return (
+			<li className="tree-item">
+				<button
+					type="button"
+					className={isSelected ? 'tree-row tree-file tree-file-selected' : 'tree-row tree-file'}
+					style={{ paddingLeft: `${depth * 18 + 14}px` }}
+					onClick={() => onFileOpen(node.path)}
+				>
+					<span className="tree-file-bullet" aria-hidden="true">
+						•
+					</span>
+					<span className="tree-label">{node.name}</span>
+				</button>
+			</li>
+		)
+	}
+
+	const isOpen = expandedPaths.has(node.path)
+
+	return (
+		<li className="tree-item">
+			<button
+				type="button"
+				className="tree-row tree-directory"
+				style={{ paddingLeft: `${depth * 18 + 10}px` }}
+				onClick={() => onToggle(node.path)}
+			>
+				<FolderIcon isOpen={isOpen} />
+				<span className="tree-label">{node.name}</span>
+			</button>
+			{isOpen && node.children.length > 0 ? (
+				<ul className="tree-list">
+					{node.children.map((child) => (
+						<TreeBranch
+							key={child.path}
+							node={child}
+							depth={depth + 1}
+							expandedPaths={expandedPaths}
+							activeFilename={activeFilename}
+							onToggle={onToggle}
+							onFileOpen={onFileOpen}
+						/>
+					))}
+				</ul>
+			) : null}
+		</li>
+	)
+}
+
 function App() {
 	const [isCollapsed, setIsCollapsed] = useState(false)
 	const [isModalOpen, setIsModalOpen] = useState(false)
@@ -85,6 +217,8 @@ function App() {
 	const [projectState, setProjectState] = useState<LoadState>('idle')
 	const [projectError, setProjectError] = useState('')
 	const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null)
+	const [fileTree, setFileTree] = useState<TreeNode | null>(null)
+	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
 	const [openFile, setOpenFile] = useState<OpenFile | null>(null)
 	const [fileState, setFileState] = useState<LoadState>('idle')
 	const [fileError, setFileError] = useState('')
@@ -172,14 +306,19 @@ function App() {
 				throw new Error('Project response was invalid')
 			}
 
-			setActiveProject({
+			const project = {
 				name: data.name,
 				files: [...data.files].sort((left, right) => left.localeCompare(right)),
-			})
+			}
+			setActiveProject(project)
+			setFileTree(buildTree(project.files))
+			setExpandedPaths(new Set([project.name]))
 			setProjectState('ready')
 			setIsModalOpen(false)
 		} catch (error) {
 			setActiveProject(null)
+			setFileTree(null)
+			setExpandedPaths(new Set())
 			setProjectState('error')
 			setProjectError(error instanceof Error ? error.message : 'Unknown error')
 		}
@@ -220,6 +359,18 @@ function App() {
 		}
 	}
 
+	function togglePath(path: string) {
+		setExpandedPaths((current) => {
+			const next = new Set(current)
+			if (next.has(path)) {
+				next.delete(path)
+			} else {
+				next.add(path)
+			}
+			return next
+		})
+	}
+
 	return (
 		<div className="app-shell">
 			<aside
@@ -238,46 +389,54 @@ function App() {
 
 				{!isCollapsed ? (
 					<>
+						<div className="sidebar-content">
+							<div className="explorer-panel-header">
+								<div>
+									<p className="explorer-eyebrow">Explorer</p>
+									<h1>{activeProject?.name ?? 'No repo opened'}</h1>
+									<p className="explorer-subtitle">
+										{activeProject === null
+											? 'Choose a repo to load its file tree.'
+											: `${activeProject.files.length} files available`}
+									</p>
+								</div>
+							</div>
+
+							<div className="explorer-tree-panel">
+								{projectState === 'idle' ? (
+									<p className="project-status">Open a repo to load files.</p>
+								) : null}
+								{projectState === 'loading' ? (
+									<p className="project-status">Loading files…</p>
+								) : null}
+								{projectState === 'error' ? (
+									<p className="project-status project-status-error">
+										Could not load files. {projectError}
+									</p>
+								) : null}
+								{projectState === 'ready' && activeProject !== null && fileTree !== null ? (
+									<ul className="tree-list">
+										<TreeBranch
+											node={{
+												name: activeProject.name,
+												path: activeProject.name,
+												kind: 'directory',
+												children: fileTree.children,
+											}}
+											depth={0}
+											expandedPaths={expandedPaths}
+											activeFilename={activeFilename}
+											onToggle={togglePath}
+											onFileOpen={(path) => void handleFileOpen(path)}
+										/>
+									</ul>
+								) : null}
+							</div>
+						</div>
+
 						<button type="button" className="open-project-button" onClick={openProjectPicker}>
 							{activeProject === null ? 'Open Repo' : 'Open Another Repo'}
 						</button>
-
-						<div className="sidebar-panel">
-							{activeProject !== null ? (
-								<>
-									<div className="sidebar-panel-header">
-										<p className="sidebar-eyebrow">Project</p>
-										<h1>{activeProject.name}</h1>
-										<p>{activeProject.files.length} files available</p>
-									</div>
-
-									<div className="file-list" role="list" aria-label="Project files">
-										{activeProject.files.map((filename) => {
-											const isSelected = filename === activeFilename
-
-											return (
-												<button
-													key={filename}
-													type="button"
-													className={isSelected ? 'file-row file-row-selected' : 'file-row'}
-													onClick={() => void handleFileOpen(filename)}
-												>
-													{filename}
-												</button>
-											)
-										})}
-									</div>
-								</>
-							) : projectState === 'loading' ? (
-								<p className="sidebar-status">Loading project…</p>
-							) : projectState === 'error' ? (
-								<p className="sidebar-status sidebar-status-error">
-									Could not open project. {projectError}
-								</p>
-							) : (
-								<p className="sidebar-status">Choose a repository to start browsing files.</p>
-							)}
-						</div>
 					</>
 				) : null}
 			</aside>
@@ -288,7 +447,7 @@ function App() {
 						<div className="workspace-placeholder">
 							<p className="workspace-eyebrow">PatchGraph</p>
 							<h2>No file open</h2>
-							<p>Open a repo, then choose a file from the sidebar.</p>
+							<p>Open a repo, then choose a file from the explorer.</p>
 						</div>
 					) : fileState === 'loading' ? (
 						<div className="workspace-placeholder">
