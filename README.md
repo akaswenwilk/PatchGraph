@@ -15,3 +15,12 @@ The server listens on `PORT` when set, otherwise defaults to `8080`.
 ```bash
 docker compose up --build
 ```
+
+## Run E2E Tests
+
+```bash
+cd frontend
+npm run test:e2e
+```
+
+That command runs a dedicated Docker Compose stack that seeds test repos, starts the backend and frontend, and executes Playwright inside a containerized browser runtime.

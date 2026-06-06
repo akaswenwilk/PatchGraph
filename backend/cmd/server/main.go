@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -30,7 +31,7 @@ func main() {
 	}
 }
 
-func projectsHandler() ([]string, error) {
+func projectsHandler() ([]projects.Project, error) {
 	root, err := projects.RootFromEnv()
 	if err != nil {
 		return nil, err
@@ -58,7 +59,7 @@ func fileHandler(projectID string, filename string) ([]string, error) {
 }
 
 func newMux(
-	listProjects func() ([]string, error),
+	listProjects func() ([]projects.Project, error),
 	getProject func(string) (projects.Detail, error),
 	readFile func(string, string) ([]string, error),
 ) http.Handler {
@@ -74,7 +75,14 @@ func newMux(
 			return
 		}
 
-		writeProjectsResponse(w, listProjects)
+		projectList, err := listProjects()
+		if err != nil {
+			log.Printf("failed to load projects: %v", err)
+			http.Error(w, "failed to load projects", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, projectList)
 	})
 	mux.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
 		projectID, remainder, ok := parseProjectPath(r.URL.Path)
@@ -102,24 +110,15 @@ func newMux(
 	return mux
 }
 
-func writeProjectsResponse(w http.ResponseWriter, listProjects func() ([]string, error)) {
-	projectNames, err := listProjects()
-	if err != nil {
-		http.Error(w, "failed to load projects", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, projectNames)
-}
-
 func writeProjectResponse(w http.ResponseWriter, projectID string, getProject func(string) (projects.Detail, error)) {
 	detail, err := getProject(projectID)
 	if err != nil {
-		if errors.Is(err, projects.ErrProjectNotFound) {
+		if errors.Is(err, fs.ErrNotExist) {
 			http.Error(w, "project not found", http.StatusNotFound)
 			return
 		}
 
+		log.Printf("failed to load project %s: %v", projectID, err)
 		http.Error(w, "failed to load project", http.StatusInternalServerError)
 		return
 	}
@@ -153,11 +152,12 @@ func writeFileResponse(
 	lines, err := readFile(projectID, request.Filename)
 	if err != nil {
 		switch {
-		case errors.Is(err, projects.ErrProjectNotFound):
-			http.Error(w, "project not found", http.StatusNotFound)
-		case errors.Is(err, projects.ErrInvalidFilePath), errors.Is(err, projects.ErrFileOutsideProject), errors.Is(err, os.ErrNotExist):
+		case errors.Is(err, fs.ErrNotExist):
+			http.Error(w, "file not found", http.StatusNotFound)
+		case errors.Is(err, projects.ErrInvalidFilePath), errors.Is(err, projects.ErrFileOutsideProject):
 			http.Error(w, "file not found", http.StatusNotFound)
 		default:
+			log.Printf("failed to read file %s in project %s: %v", request.Filename, projectID, err)
 			http.Error(w, "failed to read file", http.StatusInternalServerError)
 		}
 		return

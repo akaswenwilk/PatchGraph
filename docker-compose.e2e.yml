@@ -1,0 +1,75 @@
+services:
+  init-repos:
+    image: alpine/git:2.49.1
+    entrypoint: []
+    environment:
+      HOME: /e2e-home
+    volumes:
+      - e2e-home:/e2e-home
+    command:
+      - /bin/sh
+      - -eu
+      - -c
+      - |
+        rm -rf /e2e-home/projects
+        repo_root=/e2e-home/projects/PatchGraph
+        worktree_root=/e2e-home/projects/_worktrees/PatchGraph-worktree
+        mkdir -p "$$(dirname "$$worktree_root")"
+        git init -q "$$repo_root"
+        git -C "$$repo_root" config user.name "PatchGraph Playwright"
+        git -C "$$repo_root" config user.email "patchgraph-playwright@example.com"
+        printf "base\n" > "$$repo_root/base.txt"
+        git -C "$$repo_root" add base.txt
+        git -C "$$repo_root" commit -qm "base"
+        git -C "$$repo_root" branch feature/worktree-switch
+        git -C "$$repo_root" worktree add "$$worktree_root" feature/worktree-switch
+        printf "worktree\n" > "$$worktree_root/worktree.txt"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      HOME: /e2e-home
+      PORT: 8080
+      PATCHGRAPH_PROJECTS_ROOT: /e2e-home/projects
+    volumes:
+      - e2e-home:/e2e-home
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/projects"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: frontend
+      VITE_API_PROXY_TARGET: http://backend:8080
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4173/"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  playwright:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.playwright
+    depends_on:
+      frontend:
+        condition: service_healthy
+    environment:
+      CI: "1"
+      PLAYWRIGHT_BASE_URL: http://frontend:4173
+    volumes:
+      - ./frontend/playwright-report:/app/playwright-report
+      - ./frontend/test-results:/app/test-results
+
+volumes:
+  e2e-home:

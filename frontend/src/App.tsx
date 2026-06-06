@@ -3,8 +3,16 @@ import './App.css'
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
-type ProjectDetail = {
+type ProjectSummary = {
+	id: string
 	name: string
+	path: string
+}
+
+type ProjectDetail = {
+	id: string
+	name: string
+	path: string
 	files: string[]
 }
 
@@ -20,6 +28,34 @@ type TreeNode = {
 	children: TreeNode[]
 }
 
+function isProjectSummary(value: unknown): value is ProjectSummary {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		typeof candidate.id === 'string' &&
+		typeof candidate.name === 'string' &&
+		typeof candidate.path === 'string'
+	)
+}
+
+function isProjectDetail(value: unknown): value is ProjectDetail {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		typeof candidate.id === 'string' &&
+		typeof candidate.name === 'string' &&
+		typeof candidate.path === 'string' &&
+		Array.isArray(candidate.files) &&
+		candidate.files.every((entry) => typeof entry === 'string')
+	)
+}
+
 function MenuIcon() {
 	return (
 		<span className="menu-icon" aria-hidden="true">
@@ -31,15 +67,11 @@ function MenuIcon() {
 }
 
 function FolderIcon({ isOpen }: { isOpen: boolean }) {
-	return (
-		<span className={isOpen ? 'tree-icon tree-icon-open' : 'tree-icon'}>
-			{isOpen ? '▾' : '▸'}
-		</span>
-	)
+	return <span className={isOpen ? 'tree-icon tree-icon-open' : 'tree-icon'}>{isOpen ? '▾' : '▸'}</span>
 }
 
-function getFuzzyScore(projectName: string, query: string) {
-	const candidate = projectName.toLowerCase()
+function getFuzzyScore(project: ProjectSummary, query: string) {
+	const candidate = `${project.name} ${project.path}`.toLowerCase()
 	const needle = query.trim().toLowerCase()
 
 	if (needle === '') {
@@ -68,15 +100,22 @@ function getFuzzyScore(projectName: string, query: string) {
 	return Number.NEGATIVE_INFINITY
 }
 
-function filterProjects(projects: string[], query: string) {
+function filterProjects(projects: ProjectSummary[], query: string) {
 	if (query.trim() === '') {
-		return [...projects].sort((left, right) => left.localeCompare(right))
+		return [...projects].sort((left, right) => {
+			const nameCompare = left.name.localeCompare(right.name)
+			if (nameCompare !== 0) {
+				return nameCompare
+			}
+
+			return left.path.localeCompare(right.path)
+		})
 	}
 
 	return projects
-		.map((projectName) => ({
-			projectName,
-			score: getFuzzyScore(projectName, query),
+		.map((project) => ({
+			project,
+			score: getFuzzyScore(project, query),
 		}))
 		.filter((entry) => Number.isFinite(entry.score))
 		.sort((left, right) => {
@@ -84,9 +123,14 @@ function filterProjects(projects: string[], query: string) {
 				return right.score - left.score
 			}
 
-			return left.projectName.localeCompare(right.projectName)
+			const nameCompare = left.project.name.localeCompare(right.project.name)
+			if (nameCompare !== 0) {
+				return nameCompare
+			}
+
+			return left.project.path.localeCompare(right.project.path)
 		})
-		.map((entry) => entry.projectName)
+		.map((entry) => entry.project)
 }
 
 function buildTree(filePaths: string[]): TreeNode {
@@ -209,9 +253,9 @@ function TreeBranch({
 function App() {
 	const [isCollapsed, setIsCollapsed] = useState(false)
 	const [isModalOpen, setIsModalOpen] = useState(false)
-	const [projects, setProjects] = useState<string[]>([])
+	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
-	const [selectedProject, setSelectedProject] = useState<string | null>(null)
+	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
 	const [projectPickerState, setProjectPickerState] = useState<LoadState>('idle')
 	const [projectPickerError, setProjectPickerError] = useState('')
 	const [projectState, setProjectState] = useState<LoadState>('idle')
@@ -226,8 +270,8 @@ function App() {
 
 	const filteredProjects = filterProjects(projects, query)
 	const highlightedProject =
-		selectedProject !== null && filteredProjects.includes(selectedProject)
-			? selectedProject
+		selectedProjectID !== null
+			? filteredProjects.find((project) => project.id === selectedProjectID) ?? (filteredProjects[0] ?? null)
 			: (filteredProjects[0] ?? null)
 
 	useEffect(() => {
@@ -248,7 +292,7 @@ function App() {
 	async function openProjectPicker() {
 		setIsModalOpen(true)
 		setQuery('')
-		setSelectedProject(null)
+		setSelectedProjectID(null)
 		setProjectPickerState('loading')
 		setProjectPickerError('')
 
@@ -259,17 +303,24 @@ function App() {
 			}
 
 			const data: unknown = await response.json()
-			if (!Array.isArray(data) || data.some((entry) => typeof entry !== 'string')) {
-				throw new Error('Projects response was not a string array')
+			if (!Array.isArray(data) || data.some((entry) => !isProjectSummary(entry))) {
+				throw new Error('Projects response was not a valid project list')
 			}
 
-			const nextProjects = [...new Set(data)].sort((left, right) => left.localeCompare(right))
+			const nextProjects = [...data].sort((left, right) => {
+				const nameCompare = left.name.localeCompare(right.name)
+				if (nameCompare !== 0) {
+					return nameCompare
+				}
+
+				return left.path.localeCompare(right.path)
+			})
 			setProjects(nextProjects)
-			setSelectedProject(nextProjects[0] ?? null)
+			setSelectedProjectID(nextProjects[0]?.id ?? null)
 			setProjectPickerState('ready')
 		} catch (error) {
 			setProjects([])
-			setSelectedProject(null)
+			setSelectedProjectID(null)
 			setProjectPickerState('error')
 			setProjectPickerError(error instanceof Error ? error.message : 'Unknown error')
 		}
@@ -288,31 +339,23 @@ function App() {
 		setActiveFilename(null)
 
 		try {
-			const response = await fetch(`/api/projects/${encodeURIComponent(highlightedProject)}`)
+			const response = await fetch(`/api/projects/${encodeURIComponent(highlightedProject.id)}`)
 			if (!response.ok) {
 				throw new Error(`Request failed with status ${response.status}`)
 			}
 
 			const data: unknown = await response.json()
-			if (
-				typeof data !== 'object' ||
-				data === null ||
-				!('name' in data) ||
-				!('files' in data) ||
-				typeof data.name !== 'string' ||
-				!Array.isArray(data.files) ||
-				data.files.some((entry) => typeof entry !== 'string')
-			) {
+			if (!isProjectDetail(data)) {
 				throw new Error('Project response was invalid')
 			}
 
 			const project = {
-				name: data.name,
+				...data,
 				files: [...data.files].sort((left, right) => left.localeCompare(right)),
 			}
 			setActiveProject(project)
 			setFileTree(buildTree(project.files))
-			setExpandedPaths(new Set([project.name]))
+			setExpandedPaths(new Set([project.id]))
 			setProjectState('ready')
 			setIsModalOpen(false)
 		} catch (error) {
@@ -334,7 +377,7 @@ function App() {
 		setFileError('')
 
 		try {
-			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.name)}/files`, {
+			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/files`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -395,9 +438,7 @@ function App() {
 									<p className="explorer-eyebrow">Explorer</p>
 									<h1>{activeProject?.name ?? 'No repo opened'}</h1>
 									<p className="explorer-subtitle">
-										{activeProject === null
-											? 'Choose a repo to load its file tree.'
-											: `${activeProject.files.length} files available`}
+										{activeProject?.path ?? 'Choose a repo to load its file tree.'}
 									</p>
 								</div>
 							</div>
@@ -419,7 +460,7 @@ function App() {
 										<TreeBranch
 											node={{
 												name: activeProject.name,
-												path: activeProject.name,
+												path: activeProject.id,
 												kind: 'directory',
 												children: fileTree.children,
 											}}
@@ -548,19 +589,22 @@ function App() {
 							) : null}
 							{projectPickerState === 'ready' && filteredProjects.length > 0 ? (
 								<div className="project-list" role="listbox" aria-label="Projects">
-									{filteredProjects.map((projectName) => {
-										const isSelected = projectName === highlightedProject
+									{filteredProjects.map((project) => {
+										const isSelected = project.id === highlightedProject?.id
 
 										return (
 											<button
-												key={projectName}
+												key={project.id}
 												type="button"
-												className={isSelected ? 'project-row project-row-selected' : 'project-row'}
+												className={
+													isSelected ? 'project-row project-row-selected' : 'project-row'
+												}
 												aria-selected={isSelected}
-												onClick={() => setSelectedProject(projectName)}
+												onClick={() => setSelectedProjectID(project.id)}
 												onDoubleClick={() => void handleProjectOpen()}
 											>
-												{projectName}
+												<span className="project-row-name">{project.name}</span>
+												<span className="project-row-path">{project.path}</span>
 											</button>
 										)
 									})}

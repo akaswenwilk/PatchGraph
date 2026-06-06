@@ -1,6 +1,8 @@
 package projects
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
@@ -13,6 +15,14 @@ const RootEnvVar = "PATCHGRAPH_PROJECTS_ROOT"
 
 var ErrRootNotConfigured = errors.New("PATCHGRAPH_PROJECTS_ROOT is not configured")
 
+type Project struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+
+	absPath string
+}
+
 func RootFromEnv() (string, error) {
 	root := strings.TrimSpace(os.Getenv(RootEnvVar))
 	if root == "" {
@@ -22,7 +32,7 @@ func RootFromEnv() (string, error) {
 	return filepath.Clean(root), nil
 }
 
-func Discover(root string) ([]string, error) {
+func Discover(root string) ([]Project, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
@@ -31,8 +41,7 @@ func Discover(root string) ([]string, error) {
 		return nil, errors.New("projects root must be a directory")
 	}
 
-	seen := make(map[string]struct{})
-	projects := make([]string, 0)
+	projectList := make([]Project, 0)
 
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -53,11 +62,18 @@ func Discover(root string) ([]string, error) {
 			return nil
 		}
 
-		name := filepath.Base(path)
-		if _, exists := seen[name]; !exists {
-			seen[name] = struct{}{}
-			projects = append(projects, name)
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
 		}
+
+		cleanRelPath := filepath.ToSlash(relPath)
+		projectList = append(projectList, Project{
+			ID:      projectID(path),
+			Name:    filepath.Base(path),
+			Path:    cleanRelPath,
+			absPath: path,
+		})
 
 		return filepath.SkipDir
 	})
@@ -65,8 +81,34 @@ func Discover(root string) ([]string, error) {
 		return nil, err
 	}
 
-	sort.Strings(projects)
-	return projects, nil
+	sort.Slice(projectList, func(left, right int) bool {
+		if projectList[left].Name != projectList[right].Name {
+			return projectList[left].Name < projectList[right].Name
+		}
+
+		return projectList[left].Path < projectList[right].Path
+	})
+
+	return projectList, nil
+}
+
+func FindByID(root string, id string) (Project, error) {
+	projects, err := Discover(root)
+	if err != nil {
+		return Project{}, err
+	}
+
+	for _, project := range projects {
+		if project.ID == id {
+			return project, nil
+		}
+	}
+
+	return Project{}, fs.ErrNotExist
+}
+
+func (project Project) AbsolutePath() string {
+	return project.absPath
 }
 
 func isProjectDirectory(path string) (bool, error) {
@@ -79,4 +121,9 @@ func isProjectDirectory(path string) (bool, error) {
 	}
 
 	return false, err
+}
+
+func projectID(path string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(path)))
+	return hex.EncodeToString(sum[:8])
 }

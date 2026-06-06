@@ -5,11 +5,11 @@ services:
       dockerfile: Dockerfile
     environment:
       PORT: 8080
-      PATCHGRAPH_PROJECTS_ROOT: /projects
+      PATCHGRAPH_PROJECTS_ROOT: ${HOME}/projects
     ports:
       - "${PORT:-8080}:8080"
     volumes:
-      - "${HOME}/projects:/projects:ro"
+      - "${HOME}/projects:${HOME}/projects:ro"
 
   frontend:
     build:

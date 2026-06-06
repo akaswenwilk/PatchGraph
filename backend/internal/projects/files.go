@@ -2,96 +2,50 @@ package projects
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
+	"fmt"
 	"io"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
 var (
-	ErrProjectNotFound    = errors.New("project not found")
 	ErrInvalidFilePath    = errors.New("invalid file path")
 	ErrFileOutsideProject = errors.New("file path escapes project root")
 )
 
 type Detail struct {
+	ID    string   `json:"id"`
 	Name  string   `json:"name"`
+	Path  string   `json:"path"`
 	Files []string `json:"files"`
 }
 
-func Get(root, name string) (Detail, error) {
-	projectPath, err := ResolvePath(root, name)
+func Get(root, id string) (Detail, error) {
+	project, err := FindByID(root, id)
 	if err != nil {
 		return Detail{}, err
 	}
 
-	files, err := listFiles(projectPath)
+	files, err := ListFiles(project)
 	if err != nil {
 		return Detail{}, err
 	}
 
 	return Detail{
-		Name:  name,
+		ID:    project.ID,
+		Name:  project.Name,
+		Path:  project.Path,
 		Files: files,
 	}, nil
 }
 
-func ResolvePath(root, name string) (string, error) {
-	projectName := strings.TrimSpace(name)
-	if projectName == "" || strings.Contains(projectName, string(filepath.Separator)) {
-		return "", ErrProjectNotFound
-	}
-
-	info, err := os.Stat(root)
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
-		return "", errors.New("projects root must be a directory")
-	}
-
-	var resolved string
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if !entry.IsDir() {
-			return nil
-		}
-		if path == root {
-			return nil
-		}
-
-		if filepath.Base(path) != projectName {
-			return nil
-		}
-
-		isRepo, repoErr := isProjectDirectory(path)
-		if repoErr != nil {
-			return repoErr
-		}
-		if !isRepo {
-			return nil
-		}
-
-		resolved = path
-		return filepath.SkipAll
-	})
-	if err != nil {
-		return "", err
-	}
-	if resolved == "" {
-		return "", ErrProjectNotFound
-	}
-
-	return resolved, nil
-}
-
-func ReadFileLines(root, projectName, filename string) ([]string, error) {
-	projectPath, err := ResolvePath(root, projectName)
+func ReadFileLines(root, projectID, filename string) ([]string, error) {
+	project, err := FindByID(root, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -101,16 +55,16 @@ func ReadFileLines(root, projectName, filename string) ([]string, error) {
 		return nil, err
 	}
 
-	absolutePath := filepath.Join(projectPath, cleanFilename)
-	relativePath, err := filepath.Rel(projectPath, absolutePath)
+	absPath := filepath.Join(project.AbsolutePath(), cleanFilename)
+	relPath, err := filepath.Rel(project.AbsolutePath(), absPath)
 	if err != nil {
 		return nil, err
 	}
-	if relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
 		return nil, ErrFileOutsideProject
 	}
 
-	file, err := os.Open(absolutePath)
+	file, err := os.Open(absPath)
 	if err != nil {
 		return nil, err
 	}
@@ -119,39 +73,54 @@ func ReadFileLines(root, projectName, filename string) ([]string, error) {
 	return readLines(file)
 }
 
-func listFiles(projectPath string) ([]string, error) {
-	files := make([]string, 0)
+func ListFiles(project Project) ([]string, error) {
+	if err := markSafeDirectory(project.AbsolutePath()); err != nil {
+		return nil, err
+	}
 
-	err := filepath.WalkDir(projectPath, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
+	command := exec.Command(
+		"git",
+		"-C",
+		project.AbsolutePath(),
+		"ls-files",
+		"--cached",
+		"--others",
+		"--exclude-standard",
+		"-z",
+	)
 
-		if entry.IsDir() {
-			if path != projectPath && entry.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if !entry.Type().IsRegular() {
-			return nil
-		}
-
-		relativePath, err := filepath.Rel(projectPath, path)
-		if err != nil {
-			return err
-		}
-
-		files = append(files, filepath.ToSlash(relativePath))
-		return nil
-	})
+	output, err := command.Output()
 	if err != nil {
 		return nil, err
 	}
 
-	sort.Strings(files)
+	entries := bytes.Split(output, []byte{0})
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if len(entry) == 0 {
+			continue
+		}
+
+		filePath := string(entry)
+		if filePath == "" {
+			continue
+		}
+
+		files = append(files, filePath)
+	}
+
+	slices.Sort(files)
 	return files, nil
+}
+
+func markSafeDirectory(path string) error {
+	command := exec.Command("git", "config", "--global", "--add", "safe.directory", path)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mark safe directory: %w: %s", err, bytes.TrimSpace(output))
+	}
+
+	return nil
 }
 
 func normalizeRelativeFilePath(filename string) (string, error) {

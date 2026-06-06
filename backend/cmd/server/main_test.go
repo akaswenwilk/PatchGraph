@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,9 +13,12 @@ import (
 	"github.com/akaswenwilk/PatchGraph/backend/internal/projects"
 )
 
-func TestProjectsEndpointReturnsProjectNames(t *testing.T) {
-	handler := newMux(func() ([]string, error) {
-		return []string{"PatchGraph", "PatchGraph-frontend-rebuild"}, nil
+func TestProjectsEndpointReturnsProjects(t *testing.T) {
+	handler := newMux(func() ([]projects.Project, error) {
+		return []projects.Project{
+			{ID: "alpha", Name: "PatchGraph", Path: "PatchGraph"},
+			{ID: "beta", Name: "PatchGraph", Path: "team/PatchGraph"},
+		}, nil
 	}, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
@@ -28,13 +32,15 @@ func TestProjectsEndpointReturnsProjectNames(t *testing.T) {
 	if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
 		t.Fatalf("Content-Type = %q, want application/json", contentType)
 	}
-	if body := strings.TrimSpace(recorder.Body.String()); body != "[\"PatchGraph\",\"PatchGraph-frontend-rebuild\"]" {
-		t.Fatalf("body = %q", body)
+	body := strings.TrimSpace(recorder.Body.String())
+	want := "[{\"id\":\"alpha\",\"name\":\"PatchGraph\",\"path\":\"PatchGraph\"},{\"id\":\"beta\",\"name\":\"PatchGraph\",\"path\":\"team/PatchGraph\"}]"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
 	}
 }
 
 func TestProjectsEndpointReturnsInternalServerError(t *testing.T) {
-	handler := newMux(func() ([]string, error) {
+	handler := newMux(func() ([]projects.Project, error) {
 		return nil, errors.New("boom")
 	}, nil, nil)
 
@@ -49,8 +55,8 @@ func TestProjectsEndpointReturnsInternalServerError(t *testing.T) {
 }
 
 func TestProjectsEndpointRejectsPost(t *testing.T) {
-	handler := newMux(func() ([]string, error) {
-		return []string{"PatchGraph"}, nil
+	handler := newMux(func() ([]projects.Project, error) {
+		return []projects.Project{{ID: "alpha", Name: "PatchGraph", Path: "PatchGraph"}}, nil
 	}, nil, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects", nil)
@@ -66,22 +72,24 @@ func TestProjectsEndpointRejectsPost(t *testing.T) {
 	}
 }
 
-func TestProjectEndpointReturnsFiles(t *testing.T) {
+func TestProjectEndpointReturnsDetail(t *testing.T) {
 	handler := newMux(
-		func() ([]string, error) { return nil, nil },
+		func() ([]projects.Project, error) { return nil, nil },
 		func(projectID string) (projects.Detail, error) {
-			if projectID != "PatchGraph" {
-				t.Fatalf("projectID = %q, want %q", projectID, "PatchGraph")
+			if projectID != "alpha" {
+				t.Fatalf("projectID = %q, want %q", projectID, "alpha")
 			}
 			return projects.Detail{
+				ID:    "alpha",
 				Name:  "PatchGraph",
+				Path:  "PatchGraph",
 				Files: []string{"README.md", "frontend/src/App.tsx"},
 			}, nil
 		},
 		nil,
 	)
 
-	request := httptest.NewRequest(http.MethodGet, "/api/projects/PatchGraph", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/projects/alpha", nil)
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, request)
@@ -89,16 +97,18 @@ func TestProjectEndpointReturnsFiles(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
-	if body := strings.TrimSpace(recorder.Body.String()); body != "{\"name\":\"PatchGraph\",\"files\":[\"README.md\",\"frontend/src/App.tsx\"]}" {
-		t.Fatalf("body = %q", body)
+	body := strings.TrimSpace(recorder.Body.String())
+	want := "{\"id\":\"alpha\",\"name\":\"PatchGraph\",\"path\":\"PatchGraph\",\"files\":[\"README.md\",\"frontend/src/App.tsx\"]}"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
 	}
 }
 
 func TestProjectEndpointReturnsNotFound(t *testing.T) {
 	handler := newMux(
-		func() ([]string, error) { return nil, nil },
+		func() ([]projects.Project, error) { return nil, nil },
 		func(projectID string) (projects.Detail, error) {
-			return projects.Detail{}, projects.ErrProjectNotFound
+			return projects.Detail{}, fs.ErrNotExist
 		},
 		nil,
 	)
@@ -115,11 +125,11 @@ func TestProjectEndpointReturnsNotFound(t *testing.T) {
 
 func TestProjectFileEndpointReturnsLines(t *testing.T) {
 	handler := newMux(
-		func() ([]string, error) { return nil, nil },
+		func() ([]projects.Project, error) { return nil, nil },
 		nil,
 		func(projectID string, filename string) ([]string, error) {
-			if projectID != "PatchGraph" {
-				t.Fatalf("projectID = %q, want %q", projectID, "PatchGraph")
+			if projectID != "alpha" {
+				t.Fatalf("projectID = %q, want %q", projectID, "alpha")
 			}
 			if filename != "frontend/src/App.tsx" {
 				t.Fatalf("filename = %q, want %q", filename, "frontend/src/App.tsx")
@@ -133,7 +143,7 @@ func TestProjectFileEndpointReturnsLines(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/projects/PatchGraph/files", bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/alpha/files", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -147,21 +157,69 @@ func TestProjectFileEndpointReturnsLines(t *testing.T) {
 	}
 }
 
-func TestProjectFileEndpointRejectsInvalidBody(t *testing.T) {
+func TestProjectFileEndpointReturnsProjectNotFound(t *testing.T) {
 	handler := newMux(
-		func() ([]string, error) { return nil, nil },
+		func() ([]projects.Project, error) { return nil, nil },
 		nil,
 		func(projectID string, filename string) ([]string, error) {
-			return nil, nil
+			return nil, fs.ErrNotExist
 		},
 	)
 
-	request := httptest.NewRequest(http.MethodPost, "/api/projects/PatchGraph/files", strings.NewReader("{"))
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/missing/files", strings.NewReader("{\"filename\":\"README.md\"}"))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
+func TestProjectFileEndpointRejectsInvalidBody(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		func(projectID string, filename string) ([]string, error) { return nil, nil },
+	)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/alpha/files", strings.NewReader("{"))
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestProjectFileEndpointRejectsGet(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		func(projectID string, filename string) ([]string, error) { return nil, nil },
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/projects/alpha/files", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+	}
+	if allow := recorder.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow = %q, want %q", allow, http.MethodPost)
+	}
+}
+
+func TestParseProjectPath(t *testing.T) {
+	projectID, remainder, ok := parseProjectPath("/api/projects/abc123/files")
+	if !ok {
+		t.Fatal("parseProjectPath() = false, want true")
+	}
+	if projectID != "abc123" || remainder != "files" {
+		t.Fatalf("parseProjectPath() = (%q, %q), want (%q, %q)", projectID, remainder, "abc123", "files")
 	}
 }
