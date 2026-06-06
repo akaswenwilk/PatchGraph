@@ -3,14 +3,24 @@ import './App.css'
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
+type ProjectDetail = {
+	name: string
+	files: string[]
+}
+
+type OpenFile = {
+	filename: string
+	lines: string[]
+}
+
 function MenuIcon() {
-  return (
-    <span className="menu-icon" aria-hidden="true">
-      <span />
-      <span />
-      <span />
-    </span>
-  )
+	return (
+		<span className="menu-icon" aria-hidden="true">
+			<span />
+			<span />
+			<span />
+		</span>
+	)
 }
 
 function getFuzzyScore(projectName: string, query: string) {
@@ -65,185 +75,362 @@ function filterProjects(projects: string[], query: string) {
 }
 
 function App() {
-  const [isCollapsed, setIsCollapsed] = useState(false)
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [projects, setProjects] = useState<string[]>([])
-  const [query, setQuery] = useState('')
-  const [selectedProject, setSelectedProject] = useState<string | null>(null)
-  const [loadState, setLoadState] = useState<LoadState>('idle')
-  const [errorMessage, setErrorMessage] = useState('')
+	const [isCollapsed, setIsCollapsed] = useState(false)
+	const [isModalOpen, setIsModalOpen] = useState(false)
+	const [projects, setProjects] = useState<string[]>([])
+	const [query, setQuery] = useState('')
+	const [selectedProject, setSelectedProject] = useState<string | null>(null)
+	const [projectPickerState, setProjectPickerState] = useState<LoadState>('idle')
+	const [projectPickerError, setProjectPickerError] = useState('')
+	const [projectState, setProjectState] = useState<LoadState>('idle')
+	const [projectError, setProjectError] = useState('')
+	const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null)
+	const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+	const [fileState, setFileState] = useState<LoadState>('idle')
+	const [fileError, setFileError] = useState('')
+	const [activeFilename, setActiveFilename] = useState<string | null>(null)
 
-  const filteredProjects = filterProjects(projects, query)
-  const activeProject =
-    selectedProject !== null && filteredProjects.includes(selectedProject)
-      ? selectedProject
-      : (filteredProjects[0] ?? null)
+	const filteredProjects = filterProjects(projects, query)
+	const highlightedProject =
+		selectedProject !== null && filteredProjects.includes(selectedProject)
+			? selectedProject
+			: (filteredProjects[0] ?? null)
 
-  useEffect(() => {
-    if (!isModalOpen) {
-      return
-    }
+	useEffect(() => {
+		if (!isModalOpen) {
+			return
+		}
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsModalOpen(false)
-      }
-    }
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setIsModalOpen(false)
+			}
+		}
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isModalOpen])
+		window.addEventListener('keydown', handleKeyDown)
+		return () => window.removeEventListener('keydown', handleKeyDown)
+	}, [isModalOpen])
 
-  async function openProjectPicker() {
-    setIsModalOpen(true)
-    setQuery('')
-    setSelectedProject(null)
-    setLoadState('loading')
-    setErrorMessage('')
+	async function openProjectPicker() {
+		setIsModalOpen(true)
+		setQuery('')
+		setSelectedProject(null)
+		setProjectPickerState('loading')
+		setProjectPickerError('')
 
-    try {
-      const response = await fetch('/api/projects')
-      if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}`)
-      }
+		try {
+			const response = await fetch('/api/projects')
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
 
-      const data: unknown = await response.json()
-      if (!Array.isArray(data) || data.some((entry) => typeof entry !== 'string')) {
-        throw new Error('Projects response was not a string array')
-      }
+			const data: unknown = await response.json()
+			if (!Array.isArray(data) || data.some((entry) => typeof entry !== 'string')) {
+				throw new Error('Projects response was not a string array')
+			}
 
-      const nextProjects = [...new Set(data)].sort((left, right) => left.localeCompare(right))
-      setProjects(nextProjects)
-      setSelectedProject(nextProjects[0] ?? null)
-      setLoadState('ready')
-    } catch (error) {
-      setProjects([])
-      setSelectedProject(null)
-      setLoadState('error')
-      setErrorMessage(error instanceof Error ? error.message : 'Unknown error')
-    }
-  }
+			const nextProjects = [...new Set(data)].sort((left, right) => left.localeCompare(right))
+			setProjects(nextProjects)
+			setSelectedProject(nextProjects[0] ?? null)
+			setProjectPickerState('ready')
+		} catch (error) {
+			setProjects([])
+			setSelectedProject(null)
+			setProjectPickerState('error')
+			setProjectPickerError(error instanceof Error ? error.message : 'Unknown error')
+		}
+	}
 
-  return (
-    <div className="app-shell">
-      <aside
-        className={isCollapsed ? 'sidebar sidebar-collapsed' : 'sidebar'}
-        aria-label="Sidebar"
-      >
-        <button
-          type="button"
-          className="menu-button"
-          aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          aria-pressed={!isCollapsed}
-          onClick={() => setIsCollapsed((value) => !value)}
-        >
-          <MenuIcon />
-        </button>
+	async function handleProjectOpen() {
+		if (highlightedProject === null) {
+			return
+		}
 
-        {!isCollapsed ? (
-          <button type="button" className="open-project-button" onClick={openProjectPicker}>
-            Open Repo
-          </button>
-        ) : null}
-      </aside>
+		setProjectState('loading')
+		setProjectError('')
+		setFileState('idle')
+		setFileError('')
+		setOpenFile(null)
+		setActiveFilename(null)
 
-      <main className="workspace" aria-hidden="true" />
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(highlightedProject)}`)
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
 
-      {isModalOpen ? (
-        <div className="modal-layer" role="presentation">
-          <button
-            type="button"
-            className="modal-backdrop"
-            aria-label="Close project picker"
-            onClick={() => setIsModalOpen(false)}
-          />
+			const data: unknown = await response.json()
+			if (
+				typeof data !== 'object' ||
+				data === null ||
+				!('name' in data) ||
+				!('files' in data) ||
+				typeof data.name !== 'string' ||
+				!Array.isArray(data.files) ||
+				data.files.some((entry) => typeof entry !== 'string')
+			) {
+				throw new Error('Project response was invalid')
+			}
 
-          <section
-            className="project-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="project-modal-title"
-          >
-            <div className="project-modal-header">
-              <div>
-                <h1 id="project-modal-title">Open Repo</h1>
-                <p>Choose a project from the backend index.</p>
-              </div>
+			setActiveProject({
+				name: data.name,
+				files: [...data.files].sort((left, right) => left.localeCompare(right)),
+			})
+			setProjectState('ready')
+			setIsModalOpen(false)
+		} catch (error) {
+			setActiveProject(null)
+			setProjectState('error')
+			setProjectError(error instanceof Error ? error.message : 'Unknown error')
+		}
+	}
 
-              <button
-                type="button"
-                className="modal-close-button"
-                aria-label="Close project picker"
-                onClick={() => setIsModalOpen(false)}
-              >
-                ×
-              </button>
-            </div>
+	async function handleFileOpen(filename: string) {
+		if (activeProject === null) {
+			return
+		}
 
-            <label className="project-search-field">
-              <span>Search repos</span>
-              <input
-                type="text"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Start typing a repo name"
-                autoFocus
-              />
-            </label>
+		setActiveFilename(filename)
+		setFileState('loading')
+		setFileError('')
 
-            <div className="project-results-panel">
-              {loadState === 'loading' ? <p className="project-status">Loading projects…</p> : null}
-              {loadState === 'error' ? (
-                <p className="project-status project-status-error">
-                  Could not load projects. {errorMessage}
-                </p>
-              ) : null}
-              {loadState === 'ready' && filteredProjects.length === 0 ? (
-                <p className="project-status">No matching repos.</p>
-              ) : null}
-              {loadState === 'ready' && filteredProjects.length > 0 ? (
-                <div className="project-list" role="listbox" aria-label="Projects">
-                  {filteredProjects.map((projectName) => {
-                    const isSelected = projectName === activeProject
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.name)}/files`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({ filename }),
+			})
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
 
-                    return (
-                      <button
-                        key={projectName}
-                        type="button"
-                        className={isSelected ? 'project-row project-row-selected' : 'project-row'}
-                        aria-selected={isSelected}
-                        onClick={() => setSelectedProject(projectName)}
-                      >
-                        {projectName}
-                      </button>
-                    )
-                  })}
-                </div>
-              ) : null}
-            </div>
+			const data: unknown = await response.json()
+			if (!Array.isArray(data) || data.some((entry) => typeof entry !== 'string')) {
+				throw new Error('File response was not a string array')
+			}
 
-            <div className="project-modal-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setIsModalOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                disabled={activeProject === null}
-                onClick={() => {}}
-              >
-                Open
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
-    </div>
-  )
+			setOpenFile({ filename, lines: data })
+			setFileState('ready')
+		} catch (error) {
+			setOpenFile(null)
+			setFileState('error')
+			setFileError(error instanceof Error ? error.message : 'Unknown error')
+		}
+	}
+
+	return (
+		<div className="app-shell">
+			<aside
+				className={isCollapsed ? 'sidebar sidebar-collapsed' : 'sidebar'}
+				aria-label="Sidebar"
+			>
+				<button
+					type="button"
+					className="menu-button"
+					aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+					aria-pressed={!isCollapsed}
+					onClick={() => setIsCollapsed((value) => !value)}
+				>
+					<MenuIcon />
+				</button>
+
+				{!isCollapsed ? (
+					<>
+						<button type="button" className="open-project-button" onClick={openProjectPicker}>
+							{activeProject === null ? 'Open Repo' : 'Open Another Repo'}
+						</button>
+
+						<div className="sidebar-panel">
+							{activeProject !== null ? (
+								<>
+									<div className="sidebar-panel-header">
+										<p className="sidebar-eyebrow">Project</p>
+										<h1>{activeProject.name}</h1>
+										<p>{activeProject.files.length} files available</p>
+									</div>
+
+									<div className="file-list" role="list" aria-label="Project files">
+										{activeProject.files.map((filename) => {
+											const isSelected = filename === activeFilename
+
+											return (
+												<button
+													key={filename}
+													type="button"
+													className={isSelected ? 'file-row file-row-selected' : 'file-row'}
+													onClick={() => void handleFileOpen(filename)}
+												>
+													{filename}
+												</button>
+											)
+										})}
+									</div>
+								</>
+							) : projectState === 'loading' ? (
+								<p className="sidebar-status">Loading project…</p>
+							) : projectState === 'error' ? (
+								<p className="sidebar-status sidebar-status-error">
+									Could not open project. {projectError}
+								</p>
+							) : (
+								<p className="sidebar-status">Choose a repository to start browsing files.</p>
+							)}
+						</div>
+					</>
+				) : null}
+			</aside>
+
+			<main className="workspace">
+				<section className="file-window" aria-label="File viewer">
+					{activeProject === null ? (
+						<div className="workspace-placeholder">
+							<p className="workspace-eyebrow">PatchGraph</p>
+							<h2>No file open</h2>
+							<p>Open a repo, then choose a file from the sidebar.</p>
+						</div>
+					) : fileState === 'loading' ? (
+						<div className="workspace-placeholder">
+							<p className="workspace-eyebrow">Opening file</p>
+							<h2>{activeFilename}</h2>
+							<p>Loading file contents…</p>
+						</div>
+					) : fileState === 'error' ? (
+						<div className="workspace-placeholder workspace-placeholder-error">
+							<p className="workspace-eyebrow">File error</p>
+							<h2>{activeFilename ?? 'Could not open file'}</h2>
+							<p>{fileError}</p>
+						</div>
+					) : openFile !== null ? (
+						<>
+							<header className="file-window-header">
+								<div>
+									<p className="workspace-eyebrow">{activeProject.name}</p>
+									<h2>{openFile.filename}</h2>
+								</div>
+								<p>{openFile.lines.length} lines</p>
+							</header>
+
+							<div className="file-code-scroll">
+								<div className="file-code" role="presentation">
+									{openFile.lines.map((line, index) => (
+										<div className="code-row" key={`${openFile.filename}:${index + 1}`}>
+											<span className="line-number">{index + 1}</span>
+											<span className="line-content">{line === '' ? ' ' : line}</span>
+										</div>
+									))}
+								</div>
+							</div>
+						</>
+					) : (
+						<div className="workspace-placeholder">
+							<p className="workspace-eyebrow">{activeProject.name}</p>
+							<h2>Select a file</h2>
+							<p>The first viewer window will open here.</p>
+						</div>
+					)}
+				</section>
+			</main>
+
+			{isModalOpen ? (
+				<div className="modal-layer" role="presentation">
+					<button
+						type="button"
+						className="modal-backdrop"
+						aria-label="Close project picker"
+						onClick={() => setIsModalOpen(false)}
+					/>
+
+					<section
+						className="project-modal"
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="project-modal-title"
+					>
+						<div className="project-modal-header">
+							<div>
+								<h1 id="project-modal-title">Open Repo</h1>
+								<p>Choose a project from the backend index.</p>
+							</div>
+
+							<button
+								type="button"
+								className="modal-close-button"
+								aria-label="Close project picker"
+								onClick={() => setIsModalOpen(false)}
+							>
+								×
+							</button>
+						</div>
+
+						<label className="project-search-field">
+							<span>Search repos</span>
+							<input
+								type="text"
+								value={query}
+								onChange={(event) => setQuery(event.target.value)}
+								placeholder="Start typing a repo name"
+								autoFocus
+							/>
+						</label>
+
+						<div className="project-results-panel">
+							{projectPickerState === 'loading' ? (
+								<p className="project-status">Loading projects…</p>
+							) : null}
+							{projectPickerState === 'error' ? (
+								<p className="project-status project-status-error">
+									Could not load projects. {projectPickerError}
+								</p>
+							) : null}
+							{projectPickerState === 'ready' && filteredProjects.length === 0 ? (
+								<p className="project-status">No matching repos.</p>
+							) : null}
+							{projectPickerState === 'ready' && filteredProjects.length > 0 ? (
+								<div className="project-list" role="listbox" aria-label="Projects">
+									{filteredProjects.map((projectName) => {
+										const isSelected = projectName === highlightedProject
+
+										return (
+											<button
+												key={projectName}
+												type="button"
+												className={isSelected ? 'project-row project-row-selected' : 'project-row'}
+												aria-selected={isSelected}
+												onClick={() => setSelectedProject(projectName)}
+												onDoubleClick={() => void handleProjectOpen()}
+											>
+												{projectName}
+											</button>
+										)
+									})}
+								</div>
+							) : null}
+						</div>
+
+						<div className="project-modal-actions">
+							<button
+								type="button"
+								className="secondary-button"
+								onClick={() => setIsModalOpen(false)}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								className="primary-button"
+								disabled={highlightedProject === null}
+								onClick={() => void handleProjectOpen()}
+							>
+								Open
+							</button>
+						</div>
+					</section>
+				</div>
+			) : null}
+		</div>
+	)
 }
 
 export default App

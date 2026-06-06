@@ -5,6 +5,7 @@
 
 .workspace {
   min-height: 100vh;
+  padding: 24px 24px 24px 336px;
 }
 
 .sidebar {
@@ -85,7 +86,6 @@
 }
 
 .open-project-button {
-  margin-top: auto;
   min-height: 48px;
   padding: 0 18px;
   border-radius: 18px;
@@ -105,6 +105,187 @@
 
 .open-project-button:active {
   transform: translateY(1px);
+}
+
+.sidebar-panel {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sidebar-panel-header h1 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 640;
+  line-height: 1.25;
+}
+
+.sidebar-panel-header p {
+  margin: 6px 0 0;
+  color: rgba(232, 238, 248, 0.66);
+  font-size: 0.92rem;
+}
+
+.sidebar-eyebrow {
+  margin: 0 0 10px;
+  color: rgba(141, 210, 182, 0.84);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sidebar-status {
+  margin: auto 0;
+  color: rgba(232, 238, 248, 0.72);
+  line-height: 1.55;
+}
+
+.sidebar-status-error {
+  color: #ffb3b3;
+}
+
+.file-list {
+  min-height: 0;
+  padding-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.file-row {
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #dce3f0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  word-break: break-word;
+  transition:
+    background 140ms ease,
+    transform 140ms ease,
+    border-color 140ms ease;
+}
+
+.file-row:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.file-row:active {
+  transform: translateY(1px);
+}
+
+.file-row-selected {
+  background: rgba(141, 210, 182, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(141, 210, 182, 0.24);
+}
+
+.file-window {
+  height: min(78vh, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 30px;
+  background:
+    linear-gradient(180deg, rgba(25, 28, 35, 0.98), rgba(15, 18, 23, 0.96)),
+    rgba(18, 21, 26, 0.96);
+  box-shadow:
+    0 20px 44px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.file-window-header {
+  padding: 22px 24px 18px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.file-window-header h2,
+.workspace-placeholder h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.file-window-header p,
+.workspace-placeholder p {
+  margin: 8px 0 0;
+  color: rgba(232, 238, 248, 0.68);
+}
+
+.workspace-placeholder {
+  height: 100%;
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.workspace-placeholder-error p:last-child {
+  color: #ffb3b3;
+}
+
+.workspace-eyebrow {
+  margin: 0 0 12px;
+  color: rgba(124, 172, 255, 0.84);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.file-code-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.file-code {
+  width: max-content;
+  min-width: 100%;
+  padding: 18px 0 24px;
+  font-family:
+    'IBM Plex Mono',
+    'SFMono-Regular',
+    'Cascadia Code',
+    monospace;
+  font-size: 0.93rem;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.code-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.line-number,
+.line-content {
+  white-space: pre;
+}
+
+.line-number {
+  padding: 0 16px 0 0;
+  color: rgba(232, 238, 248, 0.34);
+  text-align: right;
+  user-select: none;
+}
+
+.line-content {
+  padding-right: 24px;
+  color: #e8eef8;
 }
 
 .modal-layer {
@@ -316,6 +497,10 @@
 }
 
 @media (max-width: 640px) {
+  .workspace {
+    padding: 92px 16px 16px;
+  }
+
   .sidebar {
     top: 16px;
     left: 16px;
@@ -336,6 +521,10 @@
   .project-modal {
     padding: 20px;
     max-height: min(82vh, 720px);
+  }
+
+  .file-window {
+    height: calc(100vh - 108px);
   }
 
   .project-results-panel {
