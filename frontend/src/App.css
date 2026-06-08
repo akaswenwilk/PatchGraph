@@ -6,6 +6,8 @@
 .workspace {
 	min-height: 100vh;
 	padding: 24px 24px 24px 336px;
+	position: relative;
+	overflow: hidden;
 }
 
 .sidebar {
@@ -148,7 +150,9 @@
 }
 
 .file-window {
-	position: relative;
+	position: absolute;
+	top: 24px;
+	left: 336px;
 	height: min(78vh, calc(100vh - 48px));
 	width: min(72vw, calc(100vw - 480px));
 	max-width: calc(100vw - 384px);
@@ -163,6 +167,19 @@
 		0 20px 44px rgba(0, 0, 0, 0.32),
 		inset 0 1px 0 rgba(255, 255, 255, 0.06);
 	overflow: visible;
+	transition:
+		box-shadow 160ms ease,
+		border-color 160ms ease,
+		transform 160ms ease;
+}
+
+.file-window-active {
+	border-color: rgba(141, 210, 182, 0.58);
+	box-shadow:
+		0 24px 56px rgba(0, 0, 0, 0.42),
+		0 0 0 1px rgba(141, 210, 182, 0.34),
+		0 0 0 8px rgba(141, 210, 182, 0.1),
+		inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .file-window-resize-handle {
@@ -650,6 +667,10 @@
 	.workspace {
 		padding: 104px 16px 16px;
 	}
+
+	.file-window {
+		left: 16px;
+	}
 }
 
 @media (max-width: 640px) {
@@ -680,7 +701,10 @@
 	}
 
 	.file-window {
+		left: 16px;
+		top: 92px;
 		height: calc(100vh - 108px);
+		max-width: calc(100vw - 32px);
 	}
 
 	.project-results-panel {

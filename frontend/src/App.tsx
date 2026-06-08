@@ -17,13 +17,16 @@ type ProjectDetail = {
 }
 
 type OpenFile = {
+	id: string
 	filename: string
+	state: LoadState
+	error: string
 	lines: string[]
-}
-
-type ViewerSize = {
-	width: number
-	height: number
+	width: number | null
+	height: number | null
+	x: number
+	y: number
+	zIndex: number
 }
 
 type TreeNode = {
@@ -32,6 +35,12 @@ type TreeNode = {
 	kind: 'directory' | 'file'
 	children: TreeNode[]
 }
+
+const DEFAULT_WINDOW_WIDTH = 900
+const DEFAULT_WINDOW_HEIGHT = 640
+const WINDOW_OFFSET_X = 28
+const WINDOW_OFFSET_Y = 24
+const WINDOW_MARGIN = 24
 
 function isProjectSummary(value: unknown): value is ProjectSummary {
 	if (typeof value !== 'object' || value === null) {
@@ -268,12 +277,14 @@ function App() {
 	const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null)
 	const [fileTree, setFileTree] = useState<TreeNode | null>(null)
 	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
-	const [openFile, setOpenFile] = useState<OpenFile | null>(null)
-	const [fileState, setFileState] = useState<LoadState>('idle')
-	const [fileError, setFileError] = useState('')
-	const [activeFilename, setActiveFilename] = useState<string | null>(null)
-	const [viewerSize, setViewerSize] = useState<ViewerSize | null>(null)
-	const fileWindowRef = useRef<HTMLElement | null>(null)
+	const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
+	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
+	const nextWindowIDRef = useRef(1)
+	const nextZIndexRef = useRef(1)
+	const activeFilename =
+		activeWindowID === null
+			? null
+			: (openFiles.find((fileWindow) => fileWindow.id === activeWindowID)?.filename ?? null)
 
 	const filteredProjects = filterProjects(projects, query)
 	const highlightedProject =
@@ -340,10 +351,8 @@ function App() {
 
 		setProjectState('loading')
 		setProjectError('')
-		setFileState('idle')
-		setFileError('')
-		setOpenFile(null)
-		setActiveFilename(null)
+		setOpenFiles([])
+		setActiveWindowID(null)
 
 		try {
 			const response = await fetch(`/api/projects/${encodeURIComponent(highlightedProject.id)}`)
@@ -374,14 +383,43 @@ function App() {
 		}
 	}
 
+	function createWindow(filename: string) {
+		const topWindow = openFiles.reduce<OpenFile | null>(
+			(currentTop, candidate) =>
+				currentTop === null || candidate.zIndex > currentTop.zIndex ? candidate : currentTop,
+			null,
+		)
+		const maxWidth = Math.max(320, window.innerWidth - 384 - WINDOW_MARGIN)
+		const maxHeight = Math.max(280, window.innerHeight - WINDOW_MARGIN * 2)
+		const width = Math.min(DEFAULT_WINDOW_WIDTH, maxWidth)
+		const height = Math.min(DEFAULT_WINDOW_HEIGHT, maxHeight)
+		const rawX = (topWindow?.x ?? 0) + (topWindow === null ? 0 : WINDOW_OFFSET_X)
+		const rawY = (topWindow?.y ?? 0) + (topWindow === null ? 0 : WINDOW_OFFSET_Y)
+		const x = Math.max(0, Math.min(rawX, Math.max(0, maxWidth - width)))
+		const y = Math.max(0, Math.min(rawY, Math.max(0, maxHeight - height)))
+
+		return {
+			id: String(nextWindowIDRef.current++),
+			filename,
+			state: 'loading' as LoadState,
+			error: '',
+			lines: [],
+			width,
+			height,
+			x,
+			y,
+			zIndex: nextZIndexRef.current++,
+		}
+	}
+
 	async function handleFileOpen(filename: string) {
 		if (activeProject === null) {
 			return
 		}
 
-		setActiveFilename(filename)
-		setFileState('loading')
-		setFileError('')
+		const pendingWindow = createWindow(filename)
+		setOpenFiles((current) => [...current, pendingWindow])
+		setActiveWindowID(pendingWindow.id)
 
 		try {
 			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/files`, {
@@ -400,30 +438,71 @@ function App() {
 				throw new Error('File response was not a string array')
 			}
 
-			setOpenFile({ filename, lines: data })
-			setFileState('ready')
+			setOpenFiles((current) =>
+				current.map((fileWindow) =>
+					fileWindow.id === pendingWindow.id
+						? {
+								...fileWindow,
+								state: 'ready',
+								error: '',
+								lines: data,
+							}
+						: fileWindow,
+				),
+			)
 		} catch (error) {
-			setOpenFile(null)
-			setFileState('error')
-			setFileError(error instanceof Error ? error.message : 'Unknown error')
+			setOpenFiles((current) =>
+				current.map((fileWindow) =>
+					fileWindow.id === pendingWindow.id
+						? {
+								...fileWindow,
+								state: 'error',
+								error: error instanceof Error ? error.message : 'Unknown error',
+								lines: [],
+							}
+						: fileWindow,
+				),
+			)
 		}
 	}
 
-	function closeFileWindow() {
-		setOpenFile(null)
-		setActiveFilename(null)
-		setFileState('idle')
-		setFileError('')
+	function focusFileWindow(windowID: string) {
+		setOpenFiles((current) =>
+			current.map((fileWindow) => {
+				if (fileWindow.id !== windowID) {
+					return fileWindow
+				}
+
+				return {
+					...fileWindow,
+					zIndex: nextZIndexRef.current++,
+				}
+			}),
+		)
+		setActiveWindowID(windowID)
+	}
+
+	function closeFileWindow(windowID: string) {
+		const remaining = openFiles.filter((fileWindow) => fileWindow.id !== windowID)
+		const nextActiveWindow = remaining.reduce<OpenFile | null>(
+			(currentTop, candidate) =>
+				currentTop === null || candidate.zIndex > currentTop.zIndex ? candidate : currentTop,
+			null,
+		)
+		setOpenFiles(remaining)
+		setActiveWindowID(nextActiveWindow?.id ?? null)
 	}
 
 	function startViewerResize(
+		windowID: string,
 		direction: 'horizontal' | 'vertical' | 'both',
 		event: React.PointerEvent<HTMLButtonElement>,
 	) {
 		event.preventDefault()
 		event.stopPropagation()
 
-		const fileWindow = fileWindowRef.current
+		focusFileWindow(windowID)
+		const fileWindow = event.currentTarget.closest('.file-window')
 		if (fileWindow === null) {
 			return
 		}
@@ -433,7 +512,7 @@ function App() {
 		const rect = fileWindow.getBoundingClientRect()
 		const minWidth = 320
 		const minHeight = 280
-		const maxWidth = Math.max(minWidth, rect.right - 24)
+		const maxWidth = Math.max(minWidth, window.innerWidth - rect.left - 24)
 		const maxHeight = Math.max(minHeight, window.innerHeight - rect.top - 24)
 		const previousUserSelect = document.body.style.userSelect
 		const previousCursor = document.body.style.cursor
@@ -445,34 +524,31 @@ function App() {
 					? 'ns-resize'
 					: 'nwse-resize'
 
-		setViewerSize({
-			width: rect.width,
-			height: rect.height,
-		})
-
 		const handlePointerMove = (event: PointerEvent) => {
-			setViewerSize((current) => {
-				const next = current ?? { width: rect.width, height: rect.height }
-				const nextWidth =
-					direction === 'vertical'
-						? next.width
-						: Math.min(
-								maxWidth,
-								Math.max(minWidth, event.clientX - rect.left),
-							)
-				const nextHeight =
-					direction === 'horizontal'
-						? next.height
-						: Math.min(
-								maxHeight,
-								Math.max(minHeight, event.clientY - rect.top),
-							)
+			setOpenFiles((current) =>
+				current.map((fileWindow) => {
+					if (fileWindow.id !== windowID) {
+						return fileWindow
+					}
 
-				return {
-					width: nextWidth,
-					height: nextHeight,
-				}
-			})
+					const currentWidth = fileWindow.width ?? rect.width
+					const currentHeight = fileWindow.height ?? rect.height
+					const nextWidth =
+						direction === 'vertical'
+							? currentWidth
+							: Math.min(maxWidth, Math.max(minWidth, event.clientX - rect.left))
+					const nextHeight =
+						direction === 'horizontal'
+							? currentHeight
+							: Math.min(maxHeight, Math.max(minHeight, event.clientY - rect.top))
+
+					return {
+						...fileWindow,
+						width: nextWidth,
+						height: nextHeight,
+					}
+				}),
+			)
 		}
 
 		const handlePointerUp = () => {
@@ -546,18 +622,18 @@ function App() {
 												name: activeProject.name,
 												path: activeProject.id,
 												kind: 'directory',
-												children: fileTree.children,
-											}}
-											depth={0}
-											expandedPaths={expandedPaths}
-											activeFilename={activeFilename}
-											onToggle={togglePath}
-											onFileOpen={(path) => void handleFileOpen(path)}
-										/>
-									</ul>
-								) : null}
-							</div>
-						</div>
+								children: fileTree.children,
+							}}
+							depth={0}
+							expandedPaths={expandedPaths}
+							activeFilename={activeFilename}
+							onToggle={togglePath}
+							onFileOpen={(path) => void handleFileOpen(path)}
+						/>
+					</ul>
+				) : null}
+			</div>
+		</div>
 
 						<button type="button" className="open-project-button" onClick={openProjectPicker}>
 							{activeProject === null ? 'Open Repo' : 'Switch Repo'}
@@ -567,141 +643,90 @@ function App() {
 			</aside>
 
 			<main className="workspace">
-				{fileState === 'loading' ? (
-					<section
-						ref={fileWindowRef}
-						className="file-window"
-						aria-label="File viewer"
-							style={
-								viewerSize === null
-									? undefined
-									: { width: viewerSize.width + 'px', height: viewerSize.height + 'px' }
-							}
-					>
-						<div className="workspace-placeholder">
-							<p className="workspace-eyebrow">Opening file</p>
-							<h2>{activeFilename}</h2>
-							<p>Loading file contents…</p>
-						</div>
-
-						<button
-							type="button"
-							className="file-window-resize-handle file-window-resize-handle-right"
-							aria-label="Resize file viewer width"
-							onPointerDown={(event) => startViewerResize('horizontal', event)}
-						/>
-						<button
-							type="button"
-							className="file-window-resize-handle file-window-resize-handle-bottom"
-							aria-label="Resize file viewer height"
-							onPointerDown={(event) => startViewerResize('vertical', event)}
-						/>
-						<button
-							type="button"
-							className="file-window-resize-handle file-window-resize-handle-corner"
-							aria-label="Resize file viewer"
-							onPointerDown={(event) => startViewerResize('both', event)}
-						/>
-					</section>
-				) : fileState === 'error' ? (
-					<section
-						ref={fileWindowRef}
-						className="file-window"
-						aria-label="File viewer"
-							style={
-								viewerSize === null
-									? undefined
-									: { width: viewerSize.width + 'px', height: viewerSize.height + 'px' }
-							}
-					>
-						<div className="workspace-placeholder workspace-placeholder-error">
-							<p className="workspace-eyebrow">File error</p>
-							<h2>{activeFilename ?? 'Could not open file'}</h2>
-							<p>{fileError}</p>
-						</div>
-
-						<button
-							type="button"
-							className="file-window-resize-handle file-window-resize-handle-right"
-							aria-label="Resize file viewer width"
-							onPointerDown={(event) => startViewerResize('horizontal', event)}
-						/>
-						<button
-							type="button"
-							className="file-window-resize-handle file-window-resize-handle-bottom"
-							aria-label="Resize file viewer height"
-							onPointerDown={(event) => startViewerResize('vertical', event)}
-						/>
-						<button
-							type="button"
-							className="file-window-resize-handle file-window-resize-handle-corner"
-							aria-label="Resize file viewer"
-							onPointerDown={(event) => startViewerResize('both', event)}
-						/>
-					</section>
-				) : openFile !== null && activeProject !== null ? (
-					<section
-						ref={fileWindowRef}
-						className="file-window"
-						aria-label="File viewer"
-							style={
-								viewerSize === null
-									? undefined
-									: { width: viewerSize.width + 'px', height: viewerSize.height + 'px' }
-							}
-					>
-						<>
-							<header className="file-window-header">
-								<div className="file-window-title-group">
-									<div>
-										<p className="workspace-eyebrow">{activeProject.name}</p>
-										<h2>{openFile.filename}</h2>
+				{[...openFiles]
+					.sort((left, right) => left.zIndex - right.zIndex)
+					.map((fileWindow) => {
+						const isActive = fileWindow.id === activeWindowID
+						return (
+							<section
+								key={fileWindow.id}
+								className={isActive ? 'file-window file-window-active' : 'file-window'}
+								aria-label={`File viewer for ${fileWindow.filename}`}
+								style={{
+									width: (fileWindow.width ?? DEFAULT_WINDOW_WIDTH) + 'px',
+									height: (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) + 'px',
+									transform: `translate(${fileWindow.x}px, ${fileWindow.y}px)`,
+									zIndex: fileWindow.zIndex,
+								}}
+								onPointerDown={() => focusFileWindow(fileWindow.id)}
+							>
+								{fileWindow.state === 'loading' ? (
+									<div className="workspace-placeholder">
+										<p className="workspace-eyebrow">Opening file</p>
+										<h2>{fileWindow.filename}</h2>
+										<p>Loading file contents…</p>
 									</div>
-									<p>{openFile.lines.length} lines</p>
-								</div>
+								) : fileWindow.state === 'error' ? (
+									<div className="workspace-placeholder workspace-placeholder-error">
+										<p className="workspace-eyebrow">File error</p>
+										<h2>{fileWindow.filename}</h2>
+										<p>{fileWindow.error}</p>
+									</div>
+								) : (
+									<>
+										<header className="file-window-header">
+											<div className="file-window-title-group">
+												<div>
+													<p className="workspace-eyebrow">{activeProject?.name ?? ''}</p>
+													<h2>{fileWindow.filename}</h2>
+												</div>
+												<p>{fileWindow.lines.length} lines</p>
+											</div>
+
+											<button
+												type="button"
+												className="file-window-close-button"
+												aria-label={`Close ${fileWindow.filename}`}
+												onClick={() => closeFileWindow(fileWindow.id)}
+											>
+												×
+											</button>
+										</header>
+
+										<div className="file-code-scroll">
+											<div className="file-code" role="presentation">
+												{fileWindow.lines.map((line, index) => (
+													<div className="code-row" key={`${fileWindow.id}:${index + 1}`}>
+														<span className="line-number">{index + 1}</span>
+														<span className="line-content">{line === '' ? ' ' : line}</span>
+													</div>
+												))}
+											</div>
+										</div>
+									</>
+								)}
 
 								<button
 									type="button"
-									className="file-window-close-button"
-									aria-label="Close file viewer"
-									onClick={closeFileWindow}
-								>
-									×
-								</button>
-							</header>
-
-							<div className="file-code-scroll">
-								<div className="file-code" role="presentation">
-									{openFile.lines.map((line, index) => (
-										<div className="code-row" key={`${openFile.filename}:${index + 1}`}>
-											<span className="line-number">{index + 1}</span>
-											<span className="line-content">{line === '' ? ' ' : line}</span>
-										</div>
-									))}
-								</div>
-							</div>
-
-							<button
-								type="button"
-								className="file-window-resize-handle file-window-resize-handle-right"
-								aria-label="Resize file viewer width"
-								onPointerDown={(event) => startViewerResize('horizontal', event)}
-							/>
-							<button
-								type="button"
-								className="file-window-resize-handle file-window-resize-handle-bottom"
-								aria-label="Resize file viewer height"
-								onPointerDown={(event) => startViewerResize('vertical', event)}
-							/>
-							<button
-								type="button"
-								className="file-window-resize-handle file-window-resize-handle-corner"
-								aria-label="Resize file viewer"
-								onPointerDown={(event) => startViewerResize('both', event)}
-							/>
-						</>
-					</section>
-				) : null}
+									className="file-window-resize-handle file-window-resize-handle-right"
+									aria-label={`Resize ${fileWindow.filename} width`}
+									onPointerDown={(event) => startViewerResize(fileWindow.id, 'horizontal', event)}
+								/>
+								<button
+									type="button"
+									className="file-window-resize-handle file-window-resize-handle-bottom"
+									aria-label={`Resize ${fileWindow.filename} height`}
+									onPointerDown={(event) => startViewerResize(fileWindow.id, 'vertical', event)}
+								/>
+								<button
+									type="button"
+									className="file-window-resize-handle file-window-resize-handle-corner"
+									aria-label={`Resize ${fileWindow.filename}`}
+									onPointerDown={(event) => startViewerResize(fileWindow.id, 'both', event)}
+								/>
+							</section>
+						)
+					})}
 			</main>
 
 			{isModalOpen ? (
