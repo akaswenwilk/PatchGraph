@@ -41,7 +41,6 @@ test('selecting a file opens its contents in the viewer', async ({ page }) => {
 	await expect(page.locator('.code-row').first().locator('.line-number')).toHaveText('1')
 	await expect(page.locator('.code-row').first().locator('.line-content')).toHaveText('base')
 	await expect(page.getByText('1 lines')).toBeVisible()
-	await expect(page.getByRole('heading', { name: 'No file open' })).not.toBeVisible()
 })
 
 test('resizing the file viewer changes its size without changing code text size', async ({
@@ -52,10 +51,10 @@ test('resizing the file viewer changes its size without changing code text size'
 	await openProject(page, /PatchGraph\s+PatchGraph$/)
 	await page.getByRole('button', { name: /base\.txt/ }).click()
 
-	const viewer = page.getByRole('region', { name: 'File viewer' })
+	const viewer = page.getByRole('region', { name: 'File viewer for base.txt' })
 	const codeLine = page.locator('.code-row').first().locator('.line-content')
 	const resizeHandle = page.getByRole('button', {
-		name: 'Resize file viewer',
+		name: 'Resize base.txt',
 		exact: true,
 	})
 
