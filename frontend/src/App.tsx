@@ -41,6 +41,13 @@ const DEFAULT_WINDOW_HEIGHT = 640
 const WINDOW_OFFSET_X = 28
 const WINDOW_OFFSET_Y = 24
 const WINDOW_MARGIN = 24
+// Canvas coordinate of the first window: clears the fixed explorer (24px gap +
+// 288px sidebar + 24px) at scroll origin so windows never open under it.
+const WINDOW_BASE_X = 336
+const WINDOW_BASE_Y = 24
+// Extra breathing room added past the furthest window so the canvas can always
+// scroll a little beyond its content, Miro-style.
+const CANVAS_PADDING = 120
 
 function isProjectSummary(value: unknown): value is ProjectSummary {
 	if (typeof value !== 'object' || value === null) {
@@ -281,6 +288,22 @@ function App() {
 	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
 	const nextWindowIDRef = useRef(1)
 	const nextZIndexRef = useRef(1)
+	const workspaceRef = useRef<HTMLElement | null>(null)
+	const dragStateRef = useRef<{
+		windowID: string
+		pointerID: number
+		// Offset (in canvas coordinates) between the pointer and the window origin
+		// at grab time, so the window tracks the pointer regardless of scroll.
+		grabOffsetX: number
+		grabOffsetY: number
+		// Last known pointer position (viewport coords), reused by the auto-scroll
+		// loop to keep moving the window while the pointer is held near an edge.
+		lastClientX: number
+		lastClientY: number
+		autoScrollFrame: number | null
+		previousUserSelect: string
+		previousCursor: string
+	} | null>(null)
 	const activeFilename =
 		activeWindowID === null
 			? null
@@ -393,10 +416,12 @@ function App() {
 		const maxHeight = Math.max(280, window.innerHeight - WINDOW_MARGIN * 2)
 		const width = Math.min(DEFAULT_WINDOW_WIDTH, maxWidth)
 		const height = Math.min(DEFAULT_WINDOW_HEIGHT, maxHeight)
-		const rawX = (topWindow?.x ?? 0) + (topWindow === null ? 0 : WINDOW_OFFSET_X)
-		const rawY = (topWindow?.y ?? 0) + (topWindow === null ? 0 : WINDOW_OFFSET_Y)
-		const x = Math.max(0, Math.min(rawX, Math.max(0, maxWidth - width)))
-		const y = Math.max(0, Math.min(rawY, Math.max(0, maxHeight - height)))
+		// On the infinite canvas we only cascade from the previous top window; the
+		// canvas grows to fit, so positions are never clamped to the viewport.
+		const x =
+			topWindow === null ? WINDOW_BASE_X : Math.max(0, topWindow.x + WINDOW_OFFSET_X)
+		const y =
+			topWindow === null ? WINDOW_BASE_Y : Math.max(0, topWindow.y + WINDOW_OFFSET_Y)
 
 		return {
 			id: String(nextWindowIDRef.current++),
@@ -512,8 +537,9 @@ function App() {
 		const rect = fileWindow.getBoundingClientRect()
 		const minWidth = 320
 		const minHeight = 280
-		const maxWidth = Math.max(minWidth, window.innerWidth - rect.left - 24)
-		const maxHeight = Math.max(minHeight, window.innerHeight - rect.top - 24)
+		// The canvas is scrollable, so windows may grow well past the viewport.
+		const maxWidth = 4000
+		const maxHeight = 4000
 		const previousUserSelect = document.body.style.userSelect
 		const previousCursor = document.body.style.cursor
 		document.body.style.userSelect = 'none'
@@ -562,6 +588,147 @@ function App() {
 		window.addEventListener('pointerup', handlePointerUp)
 	}
 
+	function startWindowDrag(windowID: string, event: React.PointerEvent<HTMLElement>) {
+		// Let the close button keep its own click; don't hijack it into a drag.
+		if ((event.target as HTMLElement).closest('.file-window-close-button')) {
+			return
+		}
+
+		event.preventDefault()
+		event.stopPropagation()
+		focusFileWindow(windowID)
+
+		const moving = openFiles.find((fileWindow) => fileWindow.id === windowID)
+		if (moving === undefined) {
+			return
+		}
+
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		// Convert the pointer (viewport coords) into canvas coords using the scroll
+		// container's fixed rect plus its current scroll offset, then record how far
+		// the grab point sits from the window origin.
+		const rect = workspace.getBoundingClientRect()
+		const pointerCanvasX = event.clientX - rect.left + workspace.scrollLeft
+		const pointerCanvasY = event.clientY - rect.top + workspace.scrollTop
+
+		// Capture the pointer on the header so every move is delivered here for the
+		// whole gesture, even after the pointer leaves the header element.
+		event.currentTarget.setPointerCapture(event.pointerId)
+		dragStateRef.current = {
+			windowID,
+			pointerID: event.pointerId,
+			grabOffsetX: pointerCanvasX - moving.x,
+			grabOffsetY: pointerCanvasY - moving.y,
+			lastClientX: event.clientX,
+			lastClientY: event.clientY,
+			autoScrollFrame: null,
+			previousUserSelect: document.body.style.userSelect,
+			previousCursor: document.body.style.cursor,
+		}
+		document.body.style.userSelect = 'none'
+		document.body.style.cursor = 'grabbing'
+	}
+
+	// Reposition the dragged window from the last known pointer position and the
+	// container's live scroll offset. Reading scroll live means the window stays
+	// glued to the pointer even while the auto-scroll loop pans the canvas.
+	function updateDraggedWindowPosition() {
+		const drag = dragStateRef.current
+		const workspace = workspaceRef.current
+		if (drag === null || workspace === null) {
+			return
+		}
+
+		const rect = workspace.getBoundingClientRect()
+		const pointerCanvasX = drag.lastClientX - rect.left + workspace.scrollLeft
+		const pointerCanvasY = drag.lastClientY - rect.top + workspace.scrollTop
+		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX)
+		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY)
+		setOpenFiles((current) =>
+			current.map((fileWindow) =>
+				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
+			),
+		)
+	}
+
+	// Pixels from the container edge at which auto-scroll kicks in, and the max
+	// pan speed (px/frame) once the pointer reaches the very edge.
+	const AUTO_SCROLL_EDGE = 60
+	const AUTO_SCROLL_MAX_SPEED = 24
+
+	function edgeVelocity(distance: number): number {
+		if (distance >= AUTO_SCROLL_EDGE) {
+			return 0
+		}
+		// Ramp from 0 at the threshold to full speed at (and past) the edge.
+		const intensity = Math.min(1, (AUTO_SCROLL_EDGE - distance) / AUTO_SCROLL_EDGE)
+		return AUTO_SCROLL_MAX_SPEED * intensity
+	}
+
+	function runAutoScroll() {
+		const drag = dragStateRef.current
+		const workspace = workspaceRef.current
+		if (drag === null || workspace === null) {
+			if (drag !== null) {
+				drag.autoScrollFrame = null
+			}
+			return
+		}
+
+		const rect = workspace.getBoundingClientRect()
+		const leftDist = drag.lastClientX - rect.left
+		const rightDist = rect.right - drag.lastClientX
+		const topDist = drag.lastClientY - rect.top
+		const bottomDist = rect.bottom - drag.lastClientY
+
+		const dx = edgeVelocity(rightDist) - edgeVelocity(leftDist)
+		const dy = edgeVelocity(bottomDist) - edgeVelocity(topDist)
+
+		if (dx !== 0 || dy !== 0) {
+			workspace.scrollLeft += dx
+			workspace.scrollTop += dy
+			// Pan dragged the canvas under the pointer — re-glue the window.
+			updateDraggedWindowPosition()
+		}
+
+		drag.autoScrollFrame = requestAnimationFrame(runAutoScroll)
+	}
+
+	function handleWindowDragMove(event: React.PointerEvent<HTMLElement>) {
+		const drag = dragStateRef.current
+		if (drag === null || event.pointerId !== drag.pointerID) {
+			return
+		}
+
+		drag.lastClientX = event.clientX
+		drag.lastClientY = event.clientY
+		updateDraggedWindowPosition()
+
+		// Keep a single auto-scroll loop alive for the whole gesture; it no-ops
+		// while the pointer is away from the edges.
+		if (drag.autoScrollFrame === null) {
+			drag.autoScrollFrame = requestAnimationFrame(runAutoScroll)
+		}
+	}
+
+	function endWindowDrag(event: React.PointerEvent<HTMLElement>) {
+		const drag = dragStateRef.current
+		if (drag === null || event.pointerId !== drag.pointerID) {
+			return
+		}
+
+		if (drag.autoScrollFrame !== null) {
+			cancelAnimationFrame(drag.autoScrollFrame)
+		}
+		document.body.style.userSelect = drag.previousUserSelect
+		document.body.style.cursor = drag.previousCursor
+		dragStateRef.current = null
+	}
+
 	function togglePath(path: string) {
 		setExpandedPaths((current) => {
 			const next = new Set(current)
@@ -573,6 +740,17 @@ function App() {
 			return next
 		})
 	}
+
+	const canvasWidth =
+		openFiles.reduce(
+			(max, fileWindow) => Math.max(max, fileWindow.x + (fileWindow.width ?? DEFAULT_WINDOW_WIDTH)),
+			0,
+		) + CANVAS_PADDING
+	const canvasHeight =
+		openFiles.reduce(
+			(max, fileWindow) => Math.max(max, fileWindow.y + (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT)),
+			0,
+		) + CANVAS_PADDING
 
 	return (
 		<div className="app-shell">
@@ -642,10 +820,19 @@ function App() {
 				) : null}
 			</aside>
 
-			<main className="workspace">
-				{[...openFiles]
-					.sort((left, right) => left.zIndex - right.zIndex)
-					.map((fileWindow) => {
+			<main className="workspace" ref={workspaceRef}>
+				<div
+					className="workspace-canvas"
+					style={{ width: canvasWidth + 'px', height: canvasHeight + 'px' }}
+				>
+				{/*
+					Render in stable insertion order and let each window's CSS `z-index`
+					(set from fileWindow.zIndex below) handle stacking. Sorting the list by
+					zIndex here would reorder the DOM nodes on every focus change, which
+					moves the captured header mid-gesture and breaks the active drag
+					(stuck grab cursor + a leaked auto-scroll rAF loop).
+				*/}
+				{openFiles.map((fileWindow) => {
 						const isActive = fileWindow.id === activeWindowID
 						return (
 							<section
@@ -674,7 +861,14 @@ function App() {
 									</div>
 								) : (
 									<>
-										<header className="file-window-header">
+										<header
+											className="file-window-header"
+											onPointerDown={(event) => startWindowDrag(fileWindow.id, event)}
+											onPointerMove={handleWindowDragMove}
+											onPointerUp={endWindowDrag}
+											onPointerCancel={endWindowDrag}
+											onLostPointerCapture={endWindowDrag}
+										>
 											<div className="file-window-title-group">
 												<div>
 													<p className="workspace-eyebrow">{activeProject?.name ?? ''}</p>
@@ -727,6 +921,7 @@ function App() {
 							</section>
 						)
 					})}
+				</div>
 			</main>
 
 			{isModalOpen ? (
