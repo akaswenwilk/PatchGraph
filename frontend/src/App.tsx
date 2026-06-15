@@ -825,9 +825,14 @@ function App() {
 					className="workspace-canvas"
 					style={{ width: canvasWidth + 'px', height: canvasHeight + 'px' }}
 				>
-				{[...openFiles]
-					.sort((left, right) => left.zIndex - right.zIndex)
-					.map((fileWindow) => {
+				{/*
+					Render in stable insertion order and let each window's CSS `z-index`
+					(set from fileWindow.zIndex below) handle stacking. Sorting the list by
+					zIndex here would reorder the DOM nodes on every focus change, which
+					moves the captured header mid-gesture and breaks the active drag
+					(stuck grab cursor + a leaked auto-scroll rAF loop).
+				*/}
+				{openFiles.map((fileWindow) => {
 						const isActive = fileWindow.id === activeWindowID
 						return (
 							<section
@@ -862,6 +867,7 @@ function App() {
 											onPointerMove={handleWindowDragMove}
 											onPointerUp={endWindowDrag}
 											onPointerCancel={endWindowDrag}
+											onLostPointerCapture={endWindowDrag}
 										>
 											<div className="file-window-title-group">
 												<div>

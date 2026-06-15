@@ -233,3 +233,59 @@ test('holding a dragged window at the viewport edge auto-scrolls the canvas', as
 	const afterRelease = await workspace.evaluate((element) => element.scrollLeft)
 	expect(Math.abs(afterRelease - settled)).toBeLessThan(2)
 })
+
+test('a previously-focused window can still be dragged after focusing another', async ({
+	page,
+}) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+
+	const translateOf = (viewer: Locator) =>
+		viewer.evaluate((element) => {
+			const matrix = new DOMMatrixReadOnly(window.getComputedStyle(element).transform)
+			return { x: matrix.m41, y: matrix.m42 }
+		})
+
+	// Drag a window's header by a fixed delta and return its before/after canvas
+	// position (read from transform, so it's scroll-independent).
+	const dragWindow = async (viewer: Locator, dx: number, dy: number) => {
+		const header = viewer.locator('.file-window-header')
+		const box = await header.boundingBox()
+		if (box === null) {
+			throw new Error('Expected header bounding box')
+		}
+		const before = await translateOf(viewer)
+		await page.mouse.move(box.x + 12, box.y + 10)
+		await page.mouse.down()
+		await page.mouse.move(box.x + 12 + dx, box.y + 10 + dy, { steps: 10 })
+		await page.mouse.up()
+		const after = await translateOf(viewer)
+		return { before, after }
+	}
+
+	// Open two windows. The second opens focused (highest z-index, last painted).
+	await page.getByRole('button', { name: /base\.txt/ }).click()
+	const first = page.getByRole('region', { name: 'File viewer for base.txt' })
+	await expect(first).toBeVisible()
+	await page.getByRole('button', { name: /second\.txt/ }).click()
+	const second = page.getByRole('region', { name: 'File viewer for second.txt' })
+	await expect(second).toBeVisible()
+
+	// Both fresh-focused windows drag fine (this part always worked).
+	const firstDrag = await dragWindow(first, 80, 60)
+	expect(firstDrag.after.x).toBeGreaterThan(firstDrag.before.x + 40)
+	const secondDrag = await dragWindow(second, 80, 60)
+	expect(secondDrag.after.x).toBeGreaterThan(secondDrag.before.x + 40)
+
+	// Regression: re-focusing the first window used to reorder the DOM nodes (the
+	// list was sorted by z-index), which moved the captured header mid-gesture and
+	// killed the drag. The window must still follow the pointer.
+	const refocusDrag = await dragWindow(first, 140, 100)
+	expect(refocusDrag.after.x).toBeGreaterThan(refocusDrag.before.x + 80)
+	expect(refocusDrag.after.y).toBeGreaterThan(refocusDrag.before.y + 60)
+
+	// And the gesture must end cleanly — no stuck 'grabbing' cursor on release.
+	const bodyCursor = await page.evaluate(() => document.body.style.cursor)
+	expect(bodyCursor).not.toBe('grabbing')
+})

@@ -19,7 +19,8 @@ services:
         git -C "$$repo_root" config user.name "PatchGraph Playwright"
         git -C "$$repo_root" config user.email "patchgraph-playwright@example.com"
         printf "base\n" > "$$repo_root/base.txt"
-        git -C "$$repo_root" add base.txt
+        printf "second\n" > "$$repo_root/second.txt"
+        git -C "$$repo_root" add base.txt second.txt
         git -C "$$repo_root" commit -qm "base"
         git -C "$$repo_root" branch feature/worktree-switch
         git -C "$$repo_root" worktree add "$$worktree_root" feature/worktree-switch
