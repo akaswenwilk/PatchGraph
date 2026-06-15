@@ -41,6 +41,11 @@ test('selecting a file opens its contents in the viewer', async ({ page }) => {
 	await expect(page.locator('.code-row').first().locator('.line-number')).toHaveText('1')
 	await expect(page.locator('.code-row').first().locator('.line-content')).toHaveText('base')
 	await expect(page.getByText('1 lines')).toBeVisible()
+
+	const viewer = page.getByRole('region', { name: 'File viewer for base.txt' })
+	await expect(viewer).toBeVisible()
+	await page.getByRole('button', { name: 'Close base.txt' }).click()
+	await expect(viewer).toHaveCount(0)
 })
 
 test('resizing the file viewer changes its size without changing code text size', async ({
