@@ -4,11 +4,16 @@
 }
 
 .workspace {
-	min-height: 100vh;
-	padding: 24px 24px 24px 336px;
-	position: relative;
-	overflow: hidden;
+	position: fixed;
+	inset: 0;
+	overflow: auto;
 	z-index: 0;
+}
+
+.workspace-canvas {
+	position: relative;
+	min-width: 100%;
+	min-height: 100%;
 }
 
 .sidebar {
@@ -153,11 +158,8 @@
 
 .file-window {
 	position: absolute;
-	top: 24px;
-	left: 336px;
-	height: min(78vh, calc(100vh - 48px));
-	width: min(72vw, calc(100vw - 480px));
-	max-width: calc(100vw - 384px);
+	top: 0;
+	left: 0;
 	display: flex;
 	flex-direction: column;
 	border: 1px solid rgba(255, 255, 255, 0.12);
@@ -169,10 +171,10 @@
 		0 20px 44px rgba(0, 0, 0, 0.32),
 		inset 0 1px 0 rgba(255, 255, 255, 0.06);
 	overflow: visible;
+	/* No transform transition: windows must track the pointer instantly while dragging. */
 	transition:
 		box-shadow 160ms ease,
-		border-color 160ms ease,
-		transform 160ms ease;
+		border-color 160ms ease;
 }
 
 .file-window-active {
@@ -266,6 +268,18 @@
 	justify-content: space-between;
 	gap: 16px;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	cursor: grab;
+	user-select: none;
+	touch-action: none;
+}
+
+.file-window-header:active {
+	cursor: grabbing;
+}
+
+/* The close button is inside the draggable header but keeps a normal cursor. */
+.file-window-header .file-window-close-button {
+	cursor: pointer;
 }
 
 .file-window-title-group {
@@ -665,21 +679,7 @@
 	transform: none;
 }
 
-@media (max-width: 900px) {
-	.workspace {
-		padding: 104px 16px 16px;
-	}
-
-	.file-window {
-		left: 16px;
-	}
-}
-
 @media (max-width: 640px) {
-	.workspace {
-		padding: 92px 16px 16px;
-	}
-
 	.sidebar {
 		top: 16px;
 		left: 16px;
@@ -700,13 +700,6 @@
 	.project-modal {
 		padding: 20px;
 		max-height: min(82vh, 720px);
-	}
-
-	.file-window {
-		left: 16px;
-		top: 92px;
-		height: calc(100vh - 108px);
-		max-width: calc(100vw - 32px);
 	}
 
 	.project-results-panel {

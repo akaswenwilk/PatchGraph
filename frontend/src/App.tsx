@@ -41,6 +41,13 @@ const DEFAULT_WINDOW_HEIGHT = 640
 const WINDOW_OFFSET_X = 28
 const WINDOW_OFFSET_Y = 24
 const WINDOW_MARGIN = 24
+// Canvas coordinate of the first window: clears the fixed explorer (24px gap +
+// 288px sidebar + 24px) at scroll origin so windows never open under it.
+const WINDOW_BASE_X = 336
+const WINDOW_BASE_Y = 24
+// Extra breathing room added past the furthest window so the canvas can always
+// scroll a little beyond its content, Miro-style.
+const CANVAS_PADDING = 120
 
 function isProjectSummary(value: unknown): value is ProjectSummary {
 	if (typeof value !== 'object' || value === null) {
@@ -281,6 +288,16 @@ function App() {
 	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
 	const nextWindowIDRef = useRef(1)
 	const nextZIndexRef = useRef(1)
+	const dragStateRef = useRef<{
+		windowID: string
+		pointerID: number
+		startClientX: number
+		startClientY: number
+		startX: number
+		startY: number
+		previousUserSelect: string
+		previousCursor: string
+	} | null>(null)
 	const activeFilename =
 		activeWindowID === null
 			? null
@@ -393,10 +410,12 @@ function App() {
 		const maxHeight = Math.max(280, window.innerHeight - WINDOW_MARGIN * 2)
 		const width = Math.min(DEFAULT_WINDOW_WIDTH, maxWidth)
 		const height = Math.min(DEFAULT_WINDOW_HEIGHT, maxHeight)
-		const rawX = (topWindow?.x ?? 0) + (topWindow === null ? 0 : WINDOW_OFFSET_X)
-		const rawY = (topWindow?.y ?? 0) + (topWindow === null ? 0 : WINDOW_OFFSET_Y)
-		const x = Math.max(0, Math.min(rawX, Math.max(0, maxWidth - width)))
-		const y = Math.max(0, Math.min(rawY, Math.max(0, maxHeight - height)))
+		// On the infinite canvas we only cascade from the previous top window; the
+		// canvas grows to fit, so positions are never clamped to the viewport.
+		const x =
+			topWindow === null ? WINDOW_BASE_X : Math.max(0, topWindow.x + WINDOW_OFFSET_X)
+		const y =
+			topWindow === null ? WINDOW_BASE_Y : Math.max(0, topWindow.y + WINDOW_OFFSET_Y)
 
 		return {
 			id: String(nextWindowIDRef.current++),
@@ -512,8 +531,9 @@ function App() {
 		const rect = fileWindow.getBoundingClientRect()
 		const minWidth = 320
 		const minHeight = 280
-		const maxWidth = Math.max(minWidth, window.innerWidth - rect.left - 24)
-		const maxHeight = Math.max(minHeight, window.innerHeight - rect.top - 24)
+		// The canvas is scrollable, so windows may grow well past the viewport.
+		const maxWidth = 4000
+		const maxHeight = 4000
 		const previousUserSelect = document.body.style.userSelect
 		const previousCursor = document.body.style.cursor
 		document.body.style.userSelect = 'none'
@@ -562,6 +582,64 @@ function App() {
 		window.addEventListener('pointerup', handlePointerUp)
 	}
 
+	function startWindowDrag(windowID: string, event: React.PointerEvent<HTMLElement>) {
+		// Let the close button keep its own click; don't hijack it into a drag.
+		if ((event.target as HTMLElement).closest('.file-window-close-button')) {
+			return
+		}
+
+		event.preventDefault()
+		event.stopPropagation()
+		focusFileWindow(windowID)
+
+		const moving = openFiles.find((fileWindow) => fileWindow.id === windowID)
+		if (moving === undefined) {
+			return
+		}
+
+		// Capture the pointer on the header so every move is delivered here for the
+		// whole gesture, even after the pointer leaves the header element.
+		event.currentTarget.setPointerCapture(event.pointerId)
+		dragStateRef.current = {
+			windowID,
+			pointerID: event.pointerId,
+			startClientX: event.clientX,
+			startClientY: event.clientY,
+			startX: moving.x,
+			startY: moving.y,
+			previousUserSelect: document.body.style.userSelect,
+			previousCursor: document.body.style.cursor,
+		}
+		document.body.style.userSelect = 'none'
+		document.body.style.cursor = 'grabbing'
+	}
+
+	function handleWindowDragMove(event: React.PointerEvent<HTMLElement>) {
+		const drag = dragStateRef.current
+		if (drag === null || event.pointerId !== drag.pointerID) {
+			return
+		}
+
+		const nextX = Math.max(0, drag.startX + (event.clientX - drag.startClientX))
+		const nextY = Math.max(0, drag.startY + (event.clientY - drag.startClientY))
+		setOpenFiles((current) =>
+			current.map((fileWindow) =>
+				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
+			),
+		)
+	}
+
+	function endWindowDrag(event: React.PointerEvent<HTMLElement>) {
+		const drag = dragStateRef.current
+		if (drag === null || event.pointerId !== drag.pointerID) {
+			return
+		}
+
+		document.body.style.userSelect = drag.previousUserSelect
+		document.body.style.cursor = drag.previousCursor
+		dragStateRef.current = null
+	}
+
 	function togglePath(path: string) {
 		setExpandedPaths((current) => {
 			const next = new Set(current)
@@ -573,6 +651,17 @@ function App() {
 			return next
 		})
 	}
+
+	const canvasWidth =
+		openFiles.reduce(
+			(max, fileWindow) => Math.max(max, fileWindow.x + (fileWindow.width ?? DEFAULT_WINDOW_WIDTH)),
+			0,
+		) + CANVAS_PADDING
+	const canvasHeight =
+		openFiles.reduce(
+			(max, fileWindow) => Math.max(max, fileWindow.y + (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT)),
+			0,
+		) + CANVAS_PADDING
 
 	return (
 		<div className="app-shell">
@@ -643,6 +732,10 @@ function App() {
 			</aside>
 
 			<main className="workspace">
+				<div
+					className="workspace-canvas"
+					style={{ width: canvasWidth + 'px', height: canvasHeight + 'px' }}
+				>
 				{[...openFiles]
 					.sort((left, right) => left.zIndex - right.zIndex)
 					.map((fileWindow) => {
@@ -674,7 +767,13 @@ function App() {
 									</div>
 								) : (
 									<>
-										<header className="file-window-header">
+										<header
+											className="file-window-header"
+											onPointerDown={(event) => startWindowDrag(fileWindow.id, event)}
+											onPointerMove={handleWindowDragMove}
+											onPointerUp={endWindowDrag}
+											onPointerCancel={endWindowDrag}
+										>
 											<div className="file-window-title-group">
 												<div>
 													<p className="workspace-eyebrow">{activeProject?.name ?? ''}</p>
@@ -727,6 +826,7 @@ function App() {
 							</section>
 						)
 					})}
+				</div>
 			</main>
 
 			{isModalOpen ? (
