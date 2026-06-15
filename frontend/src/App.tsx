@@ -288,13 +288,19 @@ function App() {
 	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
 	const nextWindowIDRef = useRef(1)
 	const nextZIndexRef = useRef(1)
+	const workspaceRef = useRef<HTMLElement | null>(null)
 	const dragStateRef = useRef<{
 		windowID: string
 		pointerID: number
-		startClientX: number
-		startClientY: number
-		startX: number
-		startY: number
+		// Offset (in canvas coordinates) between the pointer and the window origin
+		// at grab time, so the window tracks the pointer regardless of scroll.
+		grabOffsetX: number
+		grabOffsetY: number
+		// Last known pointer position (viewport coords), reused by the auto-scroll
+		// loop to keep moving the window while the pointer is held near an edge.
+		lastClientX: number
+		lastClientY: number
+		autoScrollFrame: number | null
 		previousUserSelect: string
 		previousCursor: string
 	} | null>(null)
@@ -597,21 +603,99 @@ function App() {
 			return
 		}
 
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		// Convert the pointer (viewport coords) into canvas coords using the scroll
+		// container's fixed rect plus its current scroll offset, then record how far
+		// the grab point sits from the window origin.
+		const rect = workspace.getBoundingClientRect()
+		const pointerCanvasX = event.clientX - rect.left + workspace.scrollLeft
+		const pointerCanvasY = event.clientY - rect.top + workspace.scrollTop
+
 		// Capture the pointer on the header so every move is delivered here for the
 		// whole gesture, even after the pointer leaves the header element.
 		event.currentTarget.setPointerCapture(event.pointerId)
 		dragStateRef.current = {
 			windowID,
 			pointerID: event.pointerId,
-			startClientX: event.clientX,
-			startClientY: event.clientY,
-			startX: moving.x,
-			startY: moving.y,
+			grabOffsetX: pointerCanvasX - moving.x,
+			grabOffsetY: pointerCanvasY - moving.y,
+			lastClientX: event.clientX,
+			lastClientY: event.clientY,
+			autoScrollFrame: null,
 			previousUserSelect: document.body.style.userSelect,
 			previousCursor: document.body.style.cursor,
 		}
 		document.body.style.userSelect = 'none'
 		document.body.style.cursor = 'grabbing'
+	}
+
+	// Reposition the dragged window from the last known pointer position and the
+	// container's live scroll offset. Reading scroll live means the window stays
+	// glued to the pointer even while the auto-scroll loop pans the canvas.
+	function updateDraggedWindowPosition() {
+		const drag = dragStateRef.current
+		const workspace = workspaceRef.current
+		if (drag === null || workspace === null) {
+			return
+		}
+
+		const rect = workspace.getBoundingClientRect()
+		const pointerCanvasX = drag.lastClientX - rect.left + workspace.scrollLeft
+		const pointerCanvasY = drag.lastClientY - rect.top + workspace.scrollTop
+		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX)
+		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY)
+		setOpenFiles((current) =>
+			current.map((fileWindow) =>
+				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
+			),
+		)
+	}
+
+	// Pixels from the container edge at which auto-scroll kicks in, and the max
+	// pan speed (px/frame) once the pointer reaches the very edge.
+	const AUTO_SCROLL_EDGE = 60
+	const AUTO_SCROLL_MAX_SPEED = 24
+
+	function edgeVelocity(distance: number): number {
+		if (distance >= AUTO_SCROLL_EDGE) {
+			return 0
+		}
+		// Ramp from 0 at the threshold to full speed at (and past) the edge.
+		const intensity = Math.min(1, (AUTO_SCROLL_EDGE - distance) / AUTO_SCROLL_EDGE)
+		return AUTO_SCROLL_MAX_SPEED * intensity
+	}
+
+	function runAutoScroll() {
+		const drag = dragStateRef.current
+		const workspace = workspaceRef.current
+		if (drag === null || workspace === null) {
+			if (drag !== null) {
+				drag.autoScrollFrame = null
+			}
+			return
+		}
+
+		const rect = workspace.getBoundingClientRect()
+		const leftDist = drag.lastClientX - rect.left
+		const rightDist = rect.right - drag.lastClientX
+		const topDist = drag.lastClientY - rect.top
+		const bottomDist = rect.bottom - drag.lastClientY
+
+		const dx = edgeVelocity(rightDist) - edgeVelocity(leftDist)
+		const dy = edgeVelocity(bottomDist) - edgeVelocity(topDist)
+
+		if (dx !== 0 || dy !== 0) {
+			workspace.scrollLeft += dx
+			workspace.scrollTop += dy
+			// Pan dragged the canvas under the pointer — re-glue the window.
+			updateDraggedWindowPosition()
+		}
+
+		drag.autoScrollFrame = requestAnimationFrame(runAutoScroll)
 	}
 
 	function handleWindowDragMove(event: React.PointerEvent<HTMLElement>) {
@@ -620,13 +704,15 @@ function App() {
 			return
 		}
 
-		const nextX = Math.max(0, drag.startX + (event.clientX - drag.startClientX))
-		const nextY = Math.max(0, drag.startY + (event.clientY - drag.startClientY))
-		setOpenFiles((current) =>
-			current.map((fileWindow) =>
-				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
-			),
-		)
+		drag.lastClientX = event.clientX
+		drag.lastClientY = event.clientY
+		updateDraggedWindowPosition()
+
+		// Keep a single auto-scroll loop alive for the whole gesture; it no-ops
+		// while the pointer is away from the edges.
+		if (drag.autoScrollFrame === null) {
+			drag.autoScrollFrame = requestAnimationFrame(runAutoScroll)
+		}
 	}
 
 	function endWindowDrag(event: React.PointerEvent<HTMLElement>) {
@@ -635,6 +721,9 @@ function App() {
 			return
 		}
 
+		if (drag.autoScrollFrame !== null) {
+			cancelAnimationFrame(drag.autoScrollFrame)
+		}
 		document.body.style.userSelect = drag.previousUserSelect
 		document.body.style.cursor = drag.previousCursor
 		dragStateRef.current = null
@@ -731,7 +820,7 @@ function App() {
 				) : null}
 			</aside>
 
-			<main className="workspace">
+			<main className="workspace" ref={workspaceRef}>
 				<div
 					className="workspace-canvas"
 					style={{ width: canvasWidth + 'px', height: canvasHeight + 'px' }}

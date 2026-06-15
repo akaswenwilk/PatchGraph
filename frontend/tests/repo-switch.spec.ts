@@ -186,3 +186,50 @@ test('dragging a window header moves it and expands the scrollable canvas', asyn
 	expect(sidebarAfter.x).toBe(sidebarBefore.x)
 	expect(Math.abs(windowBeforeScroll.x - windowAfterScroll.x - appliedScroll)).toBeLessThan(2)
 })
+
+test('holding a dragged window at the viewport edge auto-scrolls the canvas', async ({
+	page,
+}) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /base\.txt/ }).click()
+
+	const viewer = page.getByRole('region', { name: 'File viewer for base.txt' })
+	const header = viewer.locator('.file-window-header')
+	const workspace = page.locator('.workspace')
+	await expect(viewer).toBeVisible()
+
+	const headerBox = await header.boundingBox()
+	const viewport = page.viewportSize()
+	if (headerBox === null || viewport === null) {
+		throw new Error('Expected header bounding box and viewport size')
+	}
+
+	// Grab the header and drag into the bottom-right corner of the viewport, then
+	// hold there without releasing so edge auto-scroll has to take over.
+	await page.mouse.move(headerBox.x + 12, headerBox.y + 10)
+	await page.mouse.down()
+	await page.mouse.move(viewport.width - 4, viewport.height - 4, { steps: 12 })
+
+	const scrollBefore = await workspace.evaluate((element) => ({
+		left: element.scrollLeft,
+		top: element.scrollTop,
+	}))
+
+	// No further pointer movement — the rAF auto-scroll loop must pan on its own.
+	await expect
+		.poll(() => workspace.evaluate((element) => element.scrollLeft), { timeout: 3000 })
+		.toBeGreaterThan(scrollBefore.left + 40)
+	await expect
+		.poll(() => workspace.evaluate((element) => element.scrollTop), { timeout: 3000 })
+		.toBeGreaterThan(scrollBefore.top + 40)
+
+	await page.mouse.up()
+
+	// Releasing stops the loop — scroll position settles.
+	const settled = await workspace.evaluate((element) => element.scrollLeft)
+	await page.waitForTimeout(250)
+	const afterRelease = await workspace.evaluate((element) => element.scrollLeft)
+	expect(Math.abs(afterRelease - settled)).toBeLessThan(2)
+})
