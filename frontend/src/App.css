@@ -261,10 +261,30 @@
 	min-height: 2px;
 	border-radius: 2px;
 	background: rgba(140, 162, 214, 0.55);
+	overflow: hidden;
+}
+
+.minimap-window-label {
+	position: absolute;
+	top: 1px;
+	left: 2px;
+	right: 1px;
+	font-size: 6px;
+	line-height: 1.1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: rgba(255, 255, 255, 0.85);
+	pointer-events: none;
+	user-select: none;
 }
 
 .minimap-window-active {
 	background: rgba(122, 162, 255, 0.95);
+}
+
+.minimap-window-active .minimap-window-label {
+	color: rgba(255, 255, 255, 0.98);
 }
 
 .minimap-viewport {

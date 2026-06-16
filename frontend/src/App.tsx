@@ -368,22 +368,30 @@ function Minimap({
 				onPointerUp={handlePointerUp}
 				onPointerCancel={handlePointerUp}
 			>
-				{openFiles.map((fileWindow) => (
-					<div
-						key={fileWindow.id}
-						className={
-							fileWindow.id === activeWindowID
-								? 'minimap-window minimap-window-active'
-								: 'minimap-window'
-						}
-						style={{
-							left: `${(fileWindow.x + PAN_MARGIN) * scale}px`,
-							top: `${(fileWindow.y + PAN_MARGIN) * scale}px`,
-							width: `${(fileWindow.width ?? DEFAULT_WINDOW_WIDTH) * scale}px`,
-							height: `${(fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) * scale}px`,
-						}}
-					/>
-				))}
+				{openFiles.map((fileWindow) => {
+					const basename =
+						fileWindow.filename.split('/').pop() ?? fileWindow.filename
+					return (
+						<div
+							key={fileWindow.id}
+							className={
+								fileWindow.id === activeWindowID
+									? 'minimap-window minimap-window-active'
+									: 'minimap-window'
+							}
+							style={{
+								left: `${(fileWindow.x + PAN_MARGIN) * scale}px`,
+								top: `${(fileWindow.y + PAN_MARGIN) * scale}px`,
+								width: `${(fileWindow.width ?? DEFAULT_WINDOW_WIDTH) * scale}px`,
+								height: `${(fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) * scale}px`,
+							}}
+						>
+							<span className="minimap-window-label" title={fileWindow.filename}>
+								{basename}
+							</span>
+						</div>
+					)
+				})}
 
 				<div
 					className="minimap-viewport"
