@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
 import { CodeView } from './CodeView'
 
@@ -49,6 +49,17 @@ const WINDOW_BASE_Y = 24
 // Extra breathing room added past the furthest window so the canvas can always
 // scroll a little beyond its content, Miro-style.
 const CANVAS_PADDING = 120
+// Ctrl+wheel zoom of the canvas (windows + their text). The file explorer lives
+// outside the canvas, so it is never scaled.
+const MIN_ZOOM = 0.25
+const MAX_ZOOM = 3
+// Per-wheel-notch sensitivity; multiplied into an exponential so zooming feels
+// uniform at every scale.
+const ZOOM_WHEEL_SENSITIVITY = 0.0015
+
+function clampZoom(value: number) {
+	return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
+}
 
 function isProjectSummary(value: unknown): value is ProjectSummary {
 	if (typeof value !== 'object' || value === null) {
@@ -287,9 +298,17 @@ function App() {
 	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
 	const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
 	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
+	const [zoom, setZoom] = useState(1)
+	const [isHelpOpen, setIsHelpOpen] = useState(false)
 	const nextWindowIDRef = useRef(1)
 	const nextZIndexRef = useRef(1)
 	const workspaceRef = useRef<HTMLElement | null>(null)
+	// Mirror of `zoom` for the imperative pointer/wheel handlers, which run
+	// outside React's render and must read the live scale.
+	const zoomRef = useRef(1)
+	// Scroll offset to apply after a zoom change so the canvas point under the
+	// cursor stays put (zoom-to-cursor). Consumed in a layout effect.
+	const pendingScrollRef = useRef<{ left: number; top: number } | null>(null)
 	const dragStateRef = useRef<{
 		windowID: string
 		pointerID: number
@@ -330,6 +349,89 @@ function App() {
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
 	}, [isModalOpen])
+
+	// Dismiss the help popover on Escape or a click outside it.
+	useEffect(() => {
+		if (!isHelpOpen) {
+			return
+		}
+
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target as HTMLElement
+			if (target.closest('.explorer-help') === null) {
+				setIsHelpOpen(false)
+			}
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setIsHelpOpen(false)
+			}
+		}
+
+		window.addEventListener('pointerdown', handlePointerDown)
+		window.addEventListener('keydown', handleKeyDown)
+		return () => {
+			window.removeEventListener('pointerdown', handlePointerDown)
+			window.removeEventListener('keydown', handleKeyDown)
+		}
+	}, [isHelpOpen])
+
+	// Ctrl+wheel zooms the canvas. We attach natively with passive:false because
+	// React's synthetic wheel listener is passive — preventDefault there can't
+	// stop the browser's own page zoom.
+	useEffect(() => {
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		const handleWheel = (event: WheelEvent) => {
+			if (!event.ctrlKey) {
+				return
+			}
+
+			event.preventDefault()
+
+			const oldZoom = zoomRef.current
+			const nextZoom = clampZoom(oldZoom * Math.exp(-event.deltaY * ZOOM_WHEEL_SENSITIVITY))
+			if (nextZoom === oldZoom) {
+				return
+			}
+
+			// Keep the canvas point currently under the cursor anchored there after
+			// the scale change by pre-computing the matching scroll offset.
+			const rect = workspace.getBoundingClientRect()
+			const offsetX = event.clientX - rect.left
+			const offsetY = event.clientY - rect.top
+			const canvasX = (offsetX + workspace.scrollLeft) / oldZoom
+			const canvasY = (offsetY + workspace.scrollTop) / oldZoom
+			pendingScrollRef.current = {
+				left: canvasX * nextZoom - offsetX,
+				top: canvasY * nextZoom - offsetY,
+			}
+
+			zoomRef.current = nextZoom
+			setZoom(nextZoom)
+		}
+
+		workspace.addEventListener('wheel', handleWheel, { passive: false })
+		return () => workspace.removeEventListener('wheel', handleWheel)
+	}, [])
+
+	// Apply the zoom-to-cursor scroll correction once the new scale has been laid
+	// out, before paint, to avoid a visible jump.
+	useLayoutEffect(() => {
+		const workspace = workspaceRef.current
+		const pending = pendingScrollRef.current
+		if (workspace === null || pending === null) {
+			return
+		}
+
+		workspace.scrollLeft = pending.left
+		workspace.scrollTop = pending.top
+		pendingScrollRef.current = null
+	}, [zoom])
 
 	async function openProjectPicker() {
 		setIsModalOpen(true)
@@ -558,16 +660,19 @@ function App() {
 						return fileWindow
 					}
 
-					const currentWidth = fileWindow.width ?? rect.width
-					const currentHeight = fileWindow.height ?? rect.height
+					// rect is the on-screen (zoomed) box; convert pointer deltas back to
+					// unscaled units so stored width/height stay in canvas space.
+					const scale = zoomRef.current
+					const currentWidth = fileWindow.width ?? rect.width / scale
+					const currentHeight = fileWindow.height ?? rect.height / scale
 					const nextWidth =
 						direction === 'vertical'
 							? currentWidth
-							: Math.min(maxWidth, Math.max(minWidth, event.clientX - rect.left))
+							: Math.min(maxWidth, Math.max(minWidth, (event.clientX - rect.left) / scale))
 					const nextHeight =
 						direction === 'horizontal'
 							? currentHeight
-							: Math.min(maxHeight, Math.max(minHeight, event.clientY - rect.top))
+							: Math.min(maxHeight, Math.max(minHeight, (event.clientY - rect.top) / scale))
 
 					return {
 						...fileWindow,
@@ -612,9 +717,11 @@ function App() {
 		// Convert the pointer (viewport coords) into canvas coords using the scroll
 		// container's fixed rect plus its current scroll offset, then record how far
 		// the grab point sits from the window origin.
+		// Divide by zoom so the grab offset is in unscaled canvas units, matching
+		// the coordinates we store in window.x/window.y.
 		const rect = workspace.getBoundingClientRect()
-		const pointerCanvasX = event.clientX - rect.left + workspace.scrollLeft
-		const pointerCanvasY = event.clientY - rect.top + workspace.scrollTop
+		const pointerCanvasX = (event.clientX - rect.left + workspace.scrollLeft) / zoomRef.current
+		const pointerCanvasY = (event.clientY - rect.top + workspace.scrollTop) / zoomRef.current
 
 		// Capture the pointer on the header so every move is delivered here for the
 		// whole gesture, even after the pointer leaves the header element.
@@ -645,8 +752,8 @@ function App() {
 		}
 
 		const rect = workspace.getBoundingClientRect()
-		const pointerCanvasX = drag.lastClientX - rect.left + workspace.scrollLeft
-		const pointerCanvasY = drag.lastClientY - rect.top + workspace.scrollTop
+		const pointerCanvasX = (drag.lastClientX - rect.left + workspace.scrollLeft) / zoomRef.current
+		const pointerCanvasY = (drag.lastClientY - rect.top + workspace.scrollTop) / zoomRef.current
 		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX)
 		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY)
 		setOpenFiles((current) =>
@@ -780,6 +887,27 @@ function App() {
 										{activeProject?.path ?? 'Choose a repo to load its file tree.'}
 									</p>
 								</div>
+
+								<div className="explorer-help">
+									<button
+										type="button"
+										className="explorer-help-button"
+										aria-label="Show canvas commands"
+										aria-expanded={isHelpOpen}
+										onClick={() => setIsHelpOpen((value) => !value)}
+									>
+										?
+									</button>
+
+									{isHelpOpen ? (
+										<div className="explorer-help-popover" role="dialog" aria-label="Canvas commands">
+											<p className="explorer-help-title">Commands</p>
+											<p className="explorer-help-line">
+												Hold <kbd>Ctrl</kbd> and use the scroll wheel to zoom in and out.
+											</p>
+										</div>
+									) : null}
+								</div>
 							</div>
 
 							<div className="explorer-tree-panel">
@@ -824,7 +952,7 @@ function App() {
 			<main className="workspace" ref={workspaceRef}>
 				<div
 					className="workspace-canvas"
-					style={{ width: canvasWidth + 'px', height: canvasHeight + 'px' }}
+					style={{ width: canvasWidth + 'px', height: canvasHeight + 'px', zoom }}
 				>
 				{/*
 					Render in stable insertion order and let each window's CSS `z-index`
