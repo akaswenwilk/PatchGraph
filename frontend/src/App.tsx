@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
+import { CodeView } from './CodeView'
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -888,14 +889,7 @@ function App() {
 										</header>
 
 										<div className="file-code-scroll">
-											<div className="file-code" role="presentation">
-												{fileWindow.lines.map((line, index) => (
-													<div className="code-row" key={`${fileWindow.id}:${index + 1}`}>
-														<span className="line-number">{index + 1}</span>
-														<span className="line-content">{line === '' ? ' ' : line}</span>
-													</div>
-												))}
-											</div>
+											<CodeView filename={fileWindow.filename} lines={fileWindow.lines} />
 										</div>
 									</>
 								)}
