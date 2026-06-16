@@ -46,9 +46,11 @@ const WINDOW_MARGIN = 24
 // 288px sidebar + 24px) at scroll origin so windows never open under it.
 const WINDOW_BASE_X = 336
 const WINDOW_BASE_Y = 24
-// Extra breathing room added past the furthest window so the canvas can always
-// scroll a little beyond its content, Miro-style.
-const CANVAS_PADDING = 120
+// Empty space kept on every side of the window cluster so the canvas can always
+// be panned around, Miro-style, even with a single window or a couple of windows
+// sitting side by side. The canvas is sized to content + this margin on all four
+// sides, and windows render offset by it so there is room above/left of them too.
+const PAN_MARGIN = 2000
 // Ctrl+wheel zoom of the canvas (windows + their text). The file explorer lives
 // outside the canvas, so it is never scaled.
 const MIN_ZOOM = 0.25
@@ -433,6 +435,20 @@ function App() {
 		pendingScrollRef.current = null
 	}, [zoom])
 
+	// Open scrolled to the logical content origin so the empty top/left pan margin
+	// starts off-screen — the view looks unchanged on load, but the user can now
+	// scroll up/left into the margin (and right/down past content) to pan around
+	// freely, even with a single window. Runs once on mount.
+	useLayoutEffect(() => {
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		workspace.scrollLeft = PAN_MARGIN
+		workspace.scrollTop = PAN_MARGIN
+	}, [])
+
 	async function openProjectPicker() {
 		setIsModalOpen(true)
 		setQuery('')
@@ -729,8 +745,8 @@ function App() {
 		dragStateRef.current = {
 			windowID,
 			pointerID: event.pointerId,
-			grabOffsetX: pointerCanvasX - moving.x,
-			grabOffsetY: pointerCanvasY - moving.y,
+			grabOffsetX: pointerCanvasX - moving.x - PAN_MARGIN,
+			grabOffsetY: pointerCanvasY - moving.y - PAN_MARGIN,
 			lastClientX: event.clientX,
 			lastClientY: event.clientY,
 			autoScrollFrame: null,
@@ -754,8 +770,8 @@ function App() {
 		const rect = workspace.getBoundingClientRect()
 		const pointerCanvasX = (drag.lastClientX - rect.left + workspace.scrollLeft) / zoomRef.current
 		const pointerCanvasY = (drag.lastClientY - rect.top + workspace.scrollTop) / zoomRef.current
-		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX)
-		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY)
+		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX - PAN_MARGIN)
+		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY - PAN_MARGIN)
 		setOpenFiles((current) =>
 			current.map((fileWindow) =>
 				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
@@ -849,16 +865,18 @@ function App() {
 		})
 	}
 
-	const canvasWidth =
-		openFiles.reduce(
-			(max, fileWindow) => Math.max(max, fileWindow.x + (fileWindow.width ?? DEFAULT_WINDOW_WIDTH)),
-			0,
-		) + CANVAS_PADDING
-	const canvasHeight =
-		openFiles.reduce(
-			(max, fileWindow) => Math.max(max, fileWindow.y + (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT)),
-			0,
-		) + CANVAS_PADDING
+	// Content extent (furthest window edges), then pad with PAN_MARGIN on every
+	// side: left/top via the per-window render offset, right/bottom via these sizes.
+	const contentWidth = openFiles.reduce(
+		(max, fileWindow) => Math.max(max, fileWindow.x + (fileWindow.width ?? DEFAULT_WINDOW_WIDTH)),
+		0,
+	)
+	const contentHeight = openFiles.reduce(
+		(max, fileWindow) => Math.max(max, fileWindow.y + (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT)),
+		0,
+	)
+	const canvasWidth = contentWidth + PAN_MARGIN * 2
+	const canvasHeight = contentHeight + PAN_MARGIN * 2
 
 	return (
 		<div className="app-shell">
@@ -971,7 +989,7 @@ function App() {
 								style={{
 									width: (fileWindow.width ?? DEFAULT_WINDOW_WIDTH) + 'px',
 									height: (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) + 'px',
-									transform: `translate(${fileWindow.x}px, ${fileWindow.y}px)`,
+									transform: `translate(${fileWindow.x + PAN_MARGIN}px, ${fileWindow.y + PAN_MARGIN}px)`,
 									zIndex: fileWindow.zIndex,
 								}}
 								onPointerDown={() => focusFileWindow(fileWindow.id)}
