@@ -229,6 +229,52 @@
 	font-weight: 600;
 }
 
+.minimap {
+	position: fixed;
+	top: 18px;
+	right: 18px;
+	z-index: 15;
+	padding: 8px;
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	border-radius: 14px;
+	background:
+		linear-gradient(180deg, rgba(28, 31, 38, 0.92), rgba(18, 20, 26, 0.9)),
+		rgba(18, 20, 26, 0.9);
+	box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
+	backdrop-filter: blur(16px);
+}
+
+.minimap-canvas {
+	position: relative;
+	overflow: hidden;
+	border-radius: 8px;
+	background:
+		linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+		rgba(255, 255, 255, 0.02);
+	cursor: pointer;
+	touch-action: none;
+}
+
+.minimap-window {
+	position: absolute;
+	min-width: 2px;
+	min-height: 2px;
+	border-radius: 2px;
+	background: rgba(140, 162, 214, 0.55);
+}
+
+.minimap-window-active {
+	background: rgba(122, 162, 255, 0.95);
+}
+
+.minimap-viewport {
+	position: absolute;
+	border: 1.5px solid rgba(122, 162, 255, 0.95);
+	border-radius: 3px;
+	background: rgba(122, 162, 255, 0.14);
+	pointer-events: none;
+}
+
 .explorer-tree-panel {
 	min-height: 0;
 	flex: 1;

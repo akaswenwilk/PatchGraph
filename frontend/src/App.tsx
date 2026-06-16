@@ -58,6 +58,12 @@ const MAX_ZOOM = 3
 // Per-wheel-notch sensitivity; multiplied into an exponential so zooming feels
 // uniform at every scale.
 const ZOOM_WHEEL_SENSITIVITY = 0.0015
+// Fixed-size overview map pinned at the top-right. The whole logical canvas is
+// scaled to fit inside this box (aspect preserved), windows are drawn as little
+// rectangles, and the current viewport is outlined; clicking/dragging in it pans
+// the real view. Like the Miro minimap / Xcode storyboard overview.
+const MINIMAP_MAX_WIDTH = 220
+const MINIMAP_MAX_HEIGHT = 160
 
 function clampZoom(value: number) {
 	return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
@@ -285,6 +291,114 @@ function TreeBranch({
 	)
 }
 
+function Minimap({
+	canvasWidth,
+	canvasHeight,
+	zoom,
+	openFiles,
+	activeWindowID,
+	viewport,
+	onNavigate,
+}: {
+	canvasWidth: number
+	canvasHeight: number
+	zoom: number
+	openFiles: OpenFile[]
+	activeWindowID: string | null
+	viewport: { scrollLeft: number; scrollTop: number; width: number; height: number }
+	onNavigate: (logicalX: number, logicalY: number) => void
+}) {
+	const mapRef = useRef<HTMLDivElement | null>(null)
+	const isDraggingRef = useRef(false)
+
+	// Single scale that fits the whole canvas inside the box with aspect intact.
+	const scale = Math.min(MINIMAP_MAX_WIDTH / canvasWidth, MINIMAP_MAX_HEIGHT / canvasHeight)
+	const mapWidth = canvasWidth * scale
+	const mapHeight = canvasHeight * scale
+
+	// The visible viewport, expressed in logical canvas units (scrollLeft is in
+	// scaled screen px, so divide by zoom), then scaled into the minimap.
+	const viewLeft = (viewport.scrollLeft / zoom) * scale
+	const viewTop = (viewport.scrollTop / zoom) * scale
+	const viewWidth = (viewport.width / zoom) * scale
+	const viewHeight = (viewport.height / zoom) * scale
+
+	const navigateFromEvent = (clientX: number, clientY: number) => {
+		const node = mapRef.current
+		if (node === null) {
+			return
+		}
+
+		const rect = node.getBoundingClientRect()
+		const localX = clientX - rect.left
+		const localY = clientY - rect.top
+		// Map back from minimap px to logical canvas coords; App centers the view.
+		onNavigate(localX / scale, localY / scale)
+	}
+
+	const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+		event.preventDefault()
+		isDraggingRef.current = true
+		event.currentTarget.setPointerCapture(event.pointerId)
+		navigateFromEvent(event.clientX, event.clientY)
+	}
+
+	const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+		if (!isDraggingRef.current) {
+			return
+		}
+		navigateFromEvent(event.clientX, event.clientY)
+	}
+
+	const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+		isDraggingRef.current = false
+		if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+			event.currentTarget.releasePointerCapture(event.pointerId)
+		}
+	}
+
+	return (
+		<div className="minimap" aria-hidden="true">
+			<div
+				ref={mapRef}
+				className="minimap-canvas"
+				style={{ width: `${mapWidth}px`, height: `${mapHeight}px` }}
+				onPointerDown={handlePointerDown}
+				onPointerMove={handlePointerMove}
+				onPointerUp={handlePointerUp}
+				onPointerCancel={handlePointerUp}
+			>
+				{openFiles.map((fileWindow) => (
+					<div
+						key={fileWindow.id}
+						className={
+							fileWindow.id === activeWindowID
+								? 'minimap-window minimap-window-active'
+								: 'minimap-window'
+						}
+						style={{
+							left: `${(fileWindow.x + PAN_MARGIN) * scale}px`,
+							top: `${(fileWindow.y + PAN_MARGIN) * scale}px`,
+							width: `${(fileWindow.width ?? DEFAULT_WINDOW_WIDTH) * scale}px`,
+							height: `${(fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) * scale}px`,
+						}}
+					/>
+				))}
+
+				<div
+					className="minimap-viewport"
+					style={{
+						left: `${viewLeft}px`,
+						top: `${viewTop}px`,
+						width: `${viewWidth}px`,
+						height: `${viewHeight}px`,
+					}}
+				/>
+			</div>
+		</div>
+	)
+}
+
 function App() {
 	const [isCollapsed, setIsCollapsed] = useState(false)
 	const [isModalOpen, setIsModalOpen] = useState(false)
@@ -302,6 +416,10 @@ function App() {
 	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
 	const [zoom, setZoom] = useState(1)
 	const [isHelpOpen, setIsHelpOpen] = useState(false)
+	// Live viewport (scroll offset + visible size) of the scroll container, kept in
+	// state so the minimap can redraw the "where am I" rectangle as the user scrolls,
+	// zooms, or resizes the window.
+	const [viewport, setViewport] = useState({ scrollLeft: 0, scrollTop: 0, width: 0, height: 0 })
 	const nextWindowIDRef = useRef(1)
 	const nextZIndexRef = useRef(1)
 	const workspaceRef = useRef<HTMLElement | null>(null)
@@ -448,6 +566,56 @@ function App() {
 		workspace.scrollLeft = PAN_MARGIN
 		workspace.scrollTop = PAN_MARGIN
 	}, [])
+
+	// Keep `viewport` in sync with the scroll container. Programmatic scrolls (the
+	// mount origin jump, zoom-to-cursor correction, drag auto-scroll, minimap
+	// navigation) all fire 'scroll', so this one listener covers every case; the
+	// ResizeObserver handles window/container resizes.
+	useEffect(() => {
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		const sync = () => {
+			setViewport({
+				scrollLeft: workspace.scrollLeft,
+				scrollTop: workspace.scrollTop,
+				width: workspace.clientWidth,
+				height: workspace.clientHeight,
+			})
+		}
+
+		sync()
+		workspace.addEventListener('scroll', sync, { passive: true })
+		const observer = new ResizeObserver(sync)
+		observer.observe(workspace)
+		return () => {
+			workspace.removeEventListener('scroll', sync)
+			observer.disconnect()
+		}
+	}, [])
+
+	// Center the view on a logical canvas point (minimap click/drag). scrollLeft is
+	// in scaled screen px, so multiply the logical point by zoom, then offset by half
+	// the viewport to center it; clamp to the scrollable range.
+	function centerViewOn(logicalX: number, logicalY: number) {
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		const targetLeft = logicalX * zoomRef.current - workspace.clientWidth / 2
+		const targetTop = logicalY * zoomRef.current - workspace.clientHeight / 2
+		workspace.scrollLeft = Math.max(
+			0,
+			Math.min(targetLeft, workspace.scrollWidth - workspace.clientWidth),
+		)
+		workspace.scrollTop = Math.max(
+			0,
+			Math.min(targetTop, workspace.scrollHeight - workspace.clientHeight),
+		)
+	}
 
 	async function openProjectPicker() {
 		setIsModalOpen(true)
@@ -1063,6 +1231,18 @@ function App() {
 					})}
 				</div>
 			</main>
+
+			{activeProject !== null ? (
+				<Minimap
+					canvasWidth={canvasWidth}
+					canvasHeight={canvasHeight}
+					zoom={zoom}
+					openFiles={openFiles}
+					activeWindowID={activeWindowID}
+					viewport={viewport}
+					onNavigate={centerViewOn}
+				/>
+			) : null}
 
 			{isModalOpen ? (
 				<div className="modal-layer" role="presentation">
