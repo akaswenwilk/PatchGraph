@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
 	highlightToLines,
@@ -14,10 +14,15 @@ import {
 	type LspSymbol,
 } from './lsp'
 
+type OpenLocation = (path: string, line: number) => void
+
 type CodeViewProps = {
 	filename: string
 	lines: string[]
 	symbols?: LspSymbol[]
+	// Zero-based line to scroll to and highlight once content is rendered.
+	focusLine?: number | null
+	onOpenLocation?: OpenLocation
 }
 
 type HighlightResult = {
@@ -30,9 +35,11 @@ type HighlightResult = {
 // Renders a file's contents with the line-number gutter. Syntax highlighting is
 // applied asynchronously via Shiki; until (or unless) it resolves, lines render
 // as plain text so content is never blocked on the highlighter. Words that the
-// language server reported information for are marked with an LSP bubble.
-export function CodeView({ filename, lines, symbols }: CodeViewProps) {
+// language server reported information for are marked with an LSP bubble whose
+// popover locations are clickable.
+export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }: CodeViewProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null)
+	const focusedRowRef = useRef<HTMLDivElement | null>(null)
 
 	useEffect(() => {
 		const lang = languageForFilename(filename)
@@ -56,6 +63,14 @@ export function CodeView({ filename, lines, symbols }: CodeViewProps) {
 		}
 	}, [filename, lines])
 
+	// Scroll the focused line into view once the content (and thus the row) exists.
+	useEffect(() => {
+		if (focusLine == null) {
+			return
+		}
+		focusedRowRef.current?.scrollIntoView({ block: 'center' })
+	}, [focusLine, lines])
+
 	// Only use tokens that match the lines currently being rendered.
 	const highlighted = result?.source === lines ? result.tokens : null
 
@@ -69,13 +84,22 @@ export function CodeView({ filename, lines, symbols }: CodeViewProps) {
 					tokens && tokens.length > 0 ? tokens : [{ content: line, color: undefined }]
 				const marks = lineMarks.get(index) ?? []
 				const segments = splitTokensWithMarks(baseTokens, marks)
+				const isFocused = focusLine === index
 
 				return (
-					<div className="code-row" key={`${filename}:${index + 1}`}>
+					<div
+						className={isFocused ? 'code-row code-row-focused' : 'code-row'}
+						key={`${filename}:${index + 1}`}
+						ref={isFocused ? focusedRowRef : undefined}
+					>
 						<span className="line-number">{index + 1}</span>
 						<span className="line-content">
 							{line === '' ? ' ' : segments.map((segment, segmentIndex) => (
-								<CodeSegment key={segmentIndex} segment={segment} />
+								<CodeSegment
+									key={segmentIndex}
+									segment={segment}
+									onOpenLocation={onOpenLocation}
+								/>
 							))}
 						</span>
 					</div>
@@ -85,7 +109,13 @@ export function CodeView({ filename, lines, symbols }: CodeViewProps) {
 	)
 }
 
-function CodeSegment({ segment }: { segment: LineSegment }) {
+function CodeSegment({
+	segment,
+	onOpenLocation,
+}: {
+	segment: LineSegment
+	onOpenLocation?: OpenLocation
+}) {
 	const style = segment.color ? { color: segment.color } : undefined
 
 	if (!segment.symbol) {
@@ -100,12 +130,20 @@ function CodeSegment({ segment }: { segment: LineSegment }) {
 			aria-label={`Language server info for ${segment.symbol.name}`}
 		>
 			{segment.content}
-			{segment.bubbleAnchor ? <LspBubble symbol={segment.symbol} /> : null}
+			{segment.bubbleAnchor ? (
+				<LspBubble symbol={segment.symbol} onOpenLocation={onOpenLocation} />
+			) : null}
 		</span>
 	)
 }
 
-function LspBubble({ symbol }: { symbol: LspSymbol }) {
+function LspBubble({
+	symbol,
+	onOpenLocation,
+}: {
+	symbol: LspSymbol
+	onOpenLocation?: OpenLocation
+}) {
 	return (
 		<span className="lsp-bubble">
 			<span className="lsp-bubble-dot" aria-hidden="true" />
@@ -114,9 +152,21 @@ function LspBubble({ symbol }: { symbol: LspSymbol }) {
 					<span className="lsp-popover-kind">{symbol.kind}</span>
 					{symbol.name}
 				</span>
-				<LspLocationGroup label="Definitions" locations={symbol.definitions} />
-				<LspLocationGroup label="References" locations={symbol.references} />
-				<LspLocationGroup label="Implementations" locations={symbol.implementations} />
+				<LspLocationGroup
+					label="Definitions"
+					locations={symbol.definitions}
+					onOpenLocation={onOpenLocation}
+				/>
+				<LspLocationGroup
+					label="References"
+					locations={symbol.references}
+					onOpenLocation={onOpenLocation}
+				/>
+				<LspLocationGroup
+					label="Implementations"
+					locations={symbol.implementations}
+					onOpenLocation={onOpenLocation}
+				/>
 				{lspInfoCount(symbol) === 0 ? (
 					<span className="lsp-popover-empty">No cross-references</span>
 				) : null}
@@ -127,7 +177,15 @@ function LspBubble({ symbol }: { symbol: LspSymbol }) {
 
 const MAX_LOCATIONS_SHOWN = 5
 
-function LspLocationGroup({ label, locations }: { label: string; locations: LspLocation[] }) {
+function LspLocationGroup({
+	label,
+	locations,
+	onOpenLocation,
+}: {
+	label: string
+	locations: LspLocation[]
+	onOpenLocation?: OpenLocation
+}) {
 	if (locations.length === 0) {
 		return null
 	}
@@ -139,9 +197,7 @@ function LspLocationGroup({ label, locations }: { label: string; locations: LspL
 				<span className="lsp-popover-count">{locations.length}</span>
 			</span>
 			{locations.slice(0, MAX_LOCATIONS_SHOWN).map((location, index) => (
-				<span className="lsp-popover-location" key={index}>
-					{location.path}:{location.range.start.line + 1}
-				</span>
+				<LspLocationItem key={index} location={location} onOpenLocation={onOpenLocation} />
 			))}
 			{locations.length > MAX_LOCATIONS_SHOWN ? (
 				<span className="lsp-popover-location lsp-popover-more">
@@ -149,5 +205,40 @@ function LspLocationGroup({ label, locations }: { label: string; locations: LspL
 				</span>
 			) : null}
 		</span>
+	)
+}
+
+function LspLocationItem({
+	location,
+	onOpenLocation,
+}: {
+	location: LspLocation
+	onOpenLocation?: OpenLocation
+}) {
+	// Project-relative paths are openable; absolute paths point outside the
+	// project (standard library, dependencies) and cannot be loaded here.
+	const inProject = !location.path.startsWith('/')
+	const line = location.range.start.line
+	const label = `${location.path}:${line + 1}`
+
+	if (!inProject || !onOpenLocation) {
+		return (
+			<span
+				className="lsp-popover-location lsp-popover-location-external"
+				title={inProject ? undefined : 'Outside this project'}
+			>
+				{label}
+			</span>
+		)
+	}
+
+	return (
+		<button
+			type="button"
+			className="lsp-popover-location lsp-popover-location-link"
+			onClick={() => onOpenLocation(location.path, line)}
+		>
+			{label}
+		</button>
 	)
 }

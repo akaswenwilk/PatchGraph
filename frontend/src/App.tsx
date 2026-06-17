@@ -30,6 +30,9 @@ type OpenFile = {
 	lines: string[]
 	lspState: LspState
 	symbols: LspSymbol[]
+	// Zero-based line to scroll to and highlight when the window opens (set when
+	// the window was opened by clicking an LSP location).
+	focusLine: number | null
 	width: number | null
 	height: number | null
 	x: number
@@ -516,7 +519,7 @@ function App() {
 		}
 	}
 
-	function createWindow(filename: string) {
+	function createWindow(filename: string, anchor?: OpenFile | null) {
 		const topWindow = openFiles.reduce<OpenFile | null>(
 			(currentTop, candidate) =>
 				currentTop === null || candidate.zIndex > currentTop.zIndex ? candidate : currentTop,
@@ -527,11 +530,20 @@ function App() {
 		const width = Math.min(DEFAULT_WINDOW_WIDTH, maxWidth)
 		const height = Math.min(DEFAULT_WINDOW_HEIGHT, maxHeight)
 		// On the infinite canvas we only cascade from the previous top window; the
-		// canvas grows to fit, so positions are never clamped to the viewport.
-		const x =
-			topWindow === null ? WINDOW_BASE_X : Math.max(0, topWindow.x + WINDOW_OFFSET_X)
-		const y =
-			topWindow === null ? WINDOW_BASE_Y : Math.max(0, topWindow.y + WINDOW_OFFSET_Y)
+		// canvas grows to fit, so positions are never clamped to the viewport. When
+		// opened from a location, sit directly to the right of the source window.
+		let x: number
+		let y: number
+		if (anchor) {
+			x = Math.max(0, anchor.x + (anchor.width ?? DEFAULT_WINDOW_WIDTH) + WINDOW_OFFSET_X)
+			y = Math.max(0, anchor.y)
+		} else if (topWindow === null) {
+			x = WINDOW_BASE_X
+			y = WINDOW_BASE_Y
+		} else {
+			x = Math.max(0, topWindow.x + WINDOW_OFFSET_X)
+			y = Math.max(0, topWindow.y + WINDOW_OFFSET_Y)
+		}
 
 		return {
 			id: String(nextWindowIDRef.current++),
@@ -541,6 +553,7 @@ function App() {
 			lines: [],
 			lspState: 'loading' as LspState,
 			symbols: [],
+			focusLine: null,
 			width,
 			height,
 			x,
@@ -549,20 +562,9 @@ function App() {
 		}
 	}
 
-	async function handleFileOpen(filename: string) {
-		if (activeProject === null) {
-			return
-		}
-
-		const pendingWindow = createWindow(filename)
-		setOpenFiles((current) => [...current, pendingWindow])
-		setActiveWindowID(pendingWindow.id)
-
-		// Fetch language-server info in parallel; it must not block file contents.
-		void loadLspInfo(activeProject.id, filename, pendingWindow.id)
-
+	async function loadFileContents(projectID: string, filename: string, windowID: string) {
 		try {
-			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/files`, {
+			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/files`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -580,20 +582,15 @@ function App() {
 
 			setOpenFiles((current) =>
 				current.map((fileWindow) =>
-					fileWindow.id === pendingWindow.id
-						? {
-								...fileWindow,
-								state: 'ready',
-								error: '',
-								lines: data,
-							}
+					fileWindow.id === windowID
+						? { ...fileWindow, state: 'ready', error: '', lines: data }
 						: fileWindow,
 				),
 			)
 		} catch (error) {
 			setOpenFiles((current) =>
 				current.map((fileWindow) =>
-					fileWindow.id === pendingWindow.id
+					fileWindow.id === windowID
 						? {
 								...fileWindow,
 								state: 'error',
@@ -604,6 +601,36 @@ function App() {
 				),
 			)
 		}
+	}
+
+	function handleFileOpen(filename: string) {
+		if (activeProject === null) {
+			return
+		}
+
+		const pendingWindow = createWindow(filename)
+		setOpenFiles((current) => [...current, pendingWindow])
+		setActiveWindowID(pendingWindow.id)
+
+		// Contents and language-server info load in parallel; neither blocks the other.
+		void loadFileContents(activeProject.id, filename, pendingWindow.id)
+		void loadLspInfo(activeProject.id, filename, pendingWindow.id)
+	}
+
+	// Opens the file referenced by an LSP location in a new window beside the
+	// source window, scrolled to and highlighting the target line.
+	function openLocationInNewWindow(originWindowID: string, path: string, line: number) {
+		if (activeProject === null) {
+			return
+		}
+
+		const origin = openFiles.find((fileWindow) => fileWindow.id === originWindowID) ?? null
+		const pendingWindow = { ...createWindow(path, origin), focusLine: line }
+		setOpenFiles((current) => [...current, pendingWindow])
+		setActiveWindowID(pendingWindow.id)
+
+		void loadFileContents(activeProject.id, path, pendingWindow.id)
+		void loadLspInfo(activeProject.id, path, pendingWindow.id)
 	}
 
 	async function loadLspInfo(projectID: string, filename: string, windowID: string) {
@@ -1076,6 +1103,10 @@ function App() {
 												filename={fileWindow.filename}
 												lines={fileWindow.lines}
 												symbols={fileWindow.symbols}
+												focusLine={fileWindow.focusLine}
+												onOpenLocation={(path, line) =>
+													openLocationInNewWindow(fileWindow.id, path, line)
+												}
 											/>
 										</div>
 									</>

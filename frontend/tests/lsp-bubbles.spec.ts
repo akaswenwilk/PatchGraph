@@ -39,6 +39,28 @@ test('opening a Go file marks symbols with language-server bubbles', async ({ pa
 	await expect(popover).toContainText('References')
 })
 
+test('clicking an LSP location opens that file at the line in a new window', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /lib\.go/ }).click()
+
+	const viewers = page.getByRole('region', { name: 'File viewer for lib.go' })
+	const sourceViewer = viewers.first()
+	await expect(sourceViewer.locator('.file-window-lsp-ready')).toBeVisible({ timeout: LSP_TIMEOUT })
+
+	// Open the popover for the first marked symbol and click its first location.
+	const token = sourceViewer.locator('.lsp-token').first()
+	await token.hover()
+	const link = token.locator('.lsp-popover-location-link').first()
+	await expect(link).toBeVisible()
+	await link.click()
+
+	// A second window for the same file opened, with the target line highlighted.
+	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
+	await expect(page.locator('.code-row-focused').first()).toBeVisible()
+})
+
 test('opening a plain-text file shows no language-server bubbles', async ({ page }) => {
 	await page.goto('/')
 

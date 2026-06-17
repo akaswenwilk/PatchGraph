@@ -440,6 +440,22 @@
 	white-space: pre;
 }
 
+/* The line a window was opened at (via an LSP location click): a steady tint
+   plus a one-shot flash so it's easy to spot on arrival. */
+.code-row-focused {
+	background: rgba(124, 172, 255, 0.14);
+	animation: lsp-focus-flash 1.2s ease-out;
+}
+
+@keyframes lsp-focus-flash {
+	0% {
+		background: rgba(124, 172, 255, 0.55);
+	}
+	100% {
+		background: rgba(124, 172, 255, 0.14);
+	}
+}
+
 .line-number {
 	padding: 0 16px 0 0;
 	color: rgba(232, 238, 248, 0.34);
@@ -551,6 +567,17 @@
 	display: flex;
 }
 
+/* Transparent bridge spanning the gap between the word and its popover so the
+   pointer can travel into the popover without dropping :hover and closing it. */
+.lsp-popover::before {
+	content: '';
+	position: absolute;
+	top: -8px;
+	left: 0;
+	right: 0;
+	height: 8px;
+}
+
 .lsp-popover-title {
 	display: flex;
 	align-items: center;
@@ -599,10 +626,37 @@
 }
 
 .lsp-popover-location {
+	display: block;
+	width: 100%;
 	font-family: 'IBM Plex Mono', 'SFMono-Regular', 'Cascadia Code', monospace;
 	font-size: 0.74rem;
 	color: rgba(232, 238, 248, 0.82);
 	word-break: break-all;
+	text-align: left;
+}
+
+/* Clickable locations: reset the button chrome, present as a link. */
+.lsp-popover-location-link {
+	margin: 0;
+	padding: 2px 6px;
+	border: none;
+	border-radius: 5px;
+	background: transparent;
+	color: rgba(124, 172, 255, 0.92);
+	cursor: pointer;
+}
+
+.lsp-popover-location-link:hover,
+.lsp-popover-location-link:focus-visible {
+	background: rgba(88, 166, 255, 0.16);
+	text-decoration: underline;
+	outline: none;
+}
+
+/* Locations outside the project cannot be opened. */
+.lsp-popover-location-external {
+	color: rgba(232, 238, 248, 0.5);
+	cursor: not-allowed;
 }
 
 .lsp-popover-more {
