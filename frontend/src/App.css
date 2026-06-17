@@ -513,12 +513,13 @@
 	border-radius: 3px;
 	background: rgba(88, 166, 255, 0.12);
 	box-shadow: inset 0 -1px 0 rgba(124, 172, 255, 0.55);
-	cursor: help;
+	cursor: pointer;
 	outline: none;
 }
 
 .lsp-token:hover,
-.lsp-token:focus-visible {
+.lsp-token:focus-visible,
+.lsp-token-open {
 	background: rgba(88, 166, 255, 0.24);
 }
 
@@ -542,7 +543,7 @@
 }
 
 .lsp-popover {
-	display: none;
+	display: flex;
 	position: absolute;
 	top: calc(100% + 8px);
 	left: 0;
@@ -561,21 +562,33 @@
 	cursor: auto;
 }
 
-.lsp-token:hover .lsp-popover,
-.lsp-token:focus .lsp-popover,
-.lsp-token:focus-within .lsp-popover {
+.lsp-popover-header {
 	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 10px;
 }
 
-/* Transparent bridge spanning the gap between the word and its popover so the
-   pointer can travel into the popover without dropping :hover and closing it. */
-.lsp-popover::before {
-	content: '';
-	position: absolute;
-	top: -8px;
-	left: 0;
-	right: 0;
-	height: 8px;
+.lsp-popover-close {
+	flex-shrink: 0;
+	width: 22px;
+	height: 22px;
+	margin: -2px -4px 0 0;
+	padding: 0;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: rgba(232, 238, 248, 0.6);
+	font-size: 1.1rem;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.lsp-popover-close:hover,
+.lsp-popover-close:focus-visible {
+	background: rgba(232, 238, 248, 0.12);
+	color: #e8eef8;
+	outline: none;
 }
 
 .lsp-popover-title {

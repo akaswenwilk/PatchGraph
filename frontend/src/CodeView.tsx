@@ -35,8 +35,8 @@ type HighlightResult = {
 // Renders a file's contents with the line-number gutter. Syntax highlighting is
 // applied asynchronously via Shiki; until (or unless) it resolves, lines render
 // as plain text so content is never blocked on the highlighter. Words that the
-// language server reported information for are marked with an LSP bubble whose
-// popover locations are clickable.
+// language server reported information for are marked with an LSP bubble; click
+// the word to open a popover of clickable locations.
 export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }: CodeViewProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null)
 	const focusedRowRef = useRef<HTMLDivElement | null>(null)
@@ -116,7 +116,22 @@ function CodeSegment({
 	segment: LineSegment
 	onOpenLocation?: OpenLocation
 }) {
+	const [open, setOpen] = useState(false)
 	const style = segment.color ? { color: segment.color } : undefined
+
+	// Close on Escape while the popover is open.
+	useEffect(() => {
+		if (!open) {
+			return
+		}
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setOpen(false)
+			}
+		}
+		document.addEventListener('keydown', handleKeyDown)
+		return () => document.removeEventListener('keydown', handleKeyDown)
+	}, [open])
 
 	if (!segment.symbol) {
 		return <span style={style}>{segment.content}</span>
@@ -124,53 +139,86 @@ function CodeSegment({
 
 	return (
 		<span
-			className="lsp-token"
+			className={open ? 'lsp-token lsp-token-open' : 'lsp-token'}
 			style={style}
+			role="button"
 			tabIndex={0}
+			aria-expanded={open}
 			aria-label={`Language server info for ${segment.symbol.name}`}
+			onClick={() => setOpen((value) => !value)}
+			onKeyDown={(event) => {
+				if (event.key === 'Enter' || event.key === ' ') {
+					event.preventDefault()
+					setOpen((value) => !value)
+				}
+			}}
 		>
 			{segment.content}
 			{segment.bubbleAnchor ? (
-				<LspBubble symbol={segment.symbol} onOpenLocation={onOpenLocation} />
+				<span className="lsp-bubble">
+					<span className="lsp-bubble-dot" aria-hidden="true" />
+					{open ? (
+						<LspPopover
+							symbol={segment.symbol}
+							onClose={() => setOpen(false)}
+							onOpenLocation={onOpenLocation}
+						/>
+					) : null}
+				</span>
 			) : null}
 		</span>
 	)
 }
 
-function LspBubble({
+function LspPopover({
 	symbol,
+	onClose,
 	onOpenLocation,
 }: {
 	symbol: LspSymbol
+	onClose: () => void
 	onOpenLocation?: OpenLocation
 }) {
 	return (
-		<span className="lsp-bubble">
-			<span className="lsp-bubble-dot" aria-hidden="true" />
-			<span className="lsp-popover" role="tooltip">
+		// Stop clicks inside the popover from toggling the token open state.
+		<span
+			className="lsp-popover"
+			role="dialog"
+			aria-label={`Language server info for ${symbol.name}`}
+			onClick={(event) => event.stopPropagation()}
+		>
+			<span className="lsp-popover-header">
 				<span className="lsp-popover-title">
 					<span className="lsp-popover-kind">{symbol.kind}</span>
 					{symbol.name}
 				</span>
-				<LspLocationGroup
-					label="Definitions"
-					locations={symbol.definitions}
-					onOpenLocation={onOpenLocation}
-				/>
-				<LspLocationGroup
-					label="References"
-					locations={symbol.references}
-					onOpenLocation={onOpenLocation}
-				/>
-				<LspLocationGroup
-					label="Implementations"
-					locations={symbol.implementations}
-					onOpenLocation={onOpenLocation}
-				/>
-				{lspInfoCount(symbol) === 0 ? (
-					<span className="lsp-popover-empty">No cross-references</span>
-				) : null}
+				<button
+					type="button"
+					className="lsp-popover-close"
+					aria-label="Close"
+					onClick={onClose}
+				>
+					×
+				</button>
 			</span>
+			<LspLocationGroup
+				label="Definitions"
+				locations={symbol.definitions}
+				onOpenLocation={onOpenLocation}
+			/>
+			<LspLocationGroup
+				label="References"
+				locations={symbol.references}
+				onOpenLocation={onOpenLocation}
+			/>
+			<LspLocationGroup
+				label="Implementations"
+				locations={symbol.implementations}
+				onOpenLocation={onOpenLocation}
+			/>
+			{lspInfoCount(symbol) === 0 ? (
+				<span className="lsp-popover-empty">No cross-references</span>
+			) : null}
 		</span>
 	)
 }

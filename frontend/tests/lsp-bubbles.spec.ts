@@ -31,12 +31,18 @@ test('opening a Go file marks symbols with language-server bubbles', async ({ pa
 	await expect(bubbles.first()).toBeVisible({ timeout: LSP_TIMEOUT })
 	expect(await bubbles.count()).toBeGreaterThan(0)
 
-	// Hovering a marked word reveals the cross-reference popover.
+	// Clicking a marked word reveals the cross-reference popover.
 	const markedWord = viewer.locator('.lsp-token').first()
-	await markedWord.hover()
+	await markedWord.click()
 	const popover = viewer.locator('.lsp-popover').first()
 	await expect(popover).toBeVisible()
 	await expect(popover).toContainText('References')
+
+	// The popover stays open until explicitly closed via its × button.
+	await viewer.getByRole('heading', { name: 'lib.go' }).hover()
+	await expect(popover).toBeVisible()
+	await popover.getByRole('button', { name: 'Close' }).click()
+	await expect(popover).toBeHidden()
 })
 
 test('clicking an LSP location opens that file at the line in a new window', async ({ page }) => {
@@ -51,7 +57,7 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 
 	// Open the popover for the first marked symbol and click its first location.
 	const token = sourceViewer.locator('.lsp-token').first()
-	await token.hover()
+	await token.click()
 	const link = token.locator('.lsp-popover-location-link').first()
 	await expect(link).toBeVisible()
 	await link.click()
