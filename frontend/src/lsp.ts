@@ -1,0 +1,220 @@
+import type { HighlightedToken } from './highlight'
+
+// Mirrors the backend POST /api/projects/{id}/lsp response shape.
+export type LspPosition = { line: number; character: number }
+export type LspRange = { start: LspPosition; end: LspPosition }
+export type LspLocation = { uri: string; path: string; range: LspRange }
+export type LspSymbol = {
+	name: string
+	kind: string
+	position: LspPosition
+	definitions: LspLocation[]
+	references: LspLocation[]
+	implementations: LspLocation[]
+}
+export type LspAnalysis = {
+	file: string
+	language: string
+	symbols: LspSymbol[]
+}
+
+function isPosition(value: unknown): value is LspPosition {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+	const candidate = value as Record<string, unknown>
+	return typeof candidate.line === 'number' && typeof candidate.character === 'number'
+}
+
+function isLocation(value: unknown): value is LspLocation {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+	const candidate = value as Record<string, unknown>
+	const range = candidate.range as Record<string, unknown> | undefined
+	return (
+		typeof candidate.uri === 'string' &&
+		typeof candidate.path === 'string' &&
+		typeof range === 'object' &&
+		range !== null &&
+		isPosition(range.start) &&
+		isPosition(range.end)
+	)
+}
+
+function isLocationArray(value: unknown): value is LspLocation[] {
+	// The backend uses JSON null for empty location sets.
+	if (value === null) {
+		return true
+	}
+	return Array.isArray(value) && value.every(isLocation)
+}
+
+function isSymbol(value: unknown): value is LspSymbol {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+	const candidate = value as Record<string, unknown>
+	return (
+		typeof candidate.name === 'string' &&
+		typeof candidate.kind === 'string' &&
+		isPosition(candidate.position) &&
+		isLocationArray(candidate.definitions) &&
+		isLocationArray(candidate.references) &&
+		isLocationArray(candidate.implementations)
+	)
+}
+
+// normalizeSymbol coerces null location sets to empty arrays so the rest of the
+// UI can treat them uniformly.
+function normalizeSymbol(symbol: LspSymbol): LspSymbol {
+	return {
+		...symbol,
+		definitions: symbol.definitions ?? [],
+		references: symbol.references ?? [],
+		implementations: symbol.implementations ?? [],
+	}
+}
+
+export function parseLspAnalysis(value: unknown): LspAnalysis | null {
+	if (typeof value !== 'object' || value === null) {
+		return null
+	}
+	const candidate = value as Record<string, unknown>
+	if (
+		typeof candidate.file !== 'string' ||
+		typeof candidate.language !== 'string' ||
+		!Array.isArray(candidate.symbols) ||
+		!candidate.symbols.every(isSymbol)
+	) {
+		return null
+	}
+
+	return {
+		file: candidate.file,
+		language: candidate.language,
+		symbols: candidate.symbols.map(normalizeSymbol),
+	}
+}
+
+export function hasLspInfo(symbol: LspSymbol): boolean {
+	return (
+		symbol.definitions.length > 0 ||
+		symbol.references.length > 0 ||
+		symbol.implementations.length > 0
+	)
+}
+
+export function lspInfoCount(symbol: LspSymbol): number {
+	return symbol.definitions.length + symbol.references.length + symbol.implementations.length
+}
+
+// A range within a single rendered line that should be marked as having LSP
+// information, plus the symbol it belongs to.
+export type SymbolMark = { start: number; end: number; symbol: LspSymbol }
+
+const IDENTIFIER_CHARACTER = /[\p{L}\p{N}_$]/u
+
+// symbolWordEnd finds the end (exclusive) of the identifier that begins at
+// `start`. The LSP only reports the start position, so we expand across
+// identifier characters to underline the whole word. Non-identifier starts mark
+// a single character.
+export function symbolWordEnd(line: string, start: number): number {
+	let end = start
+	while (end < line.length && IDENTIFIER_CHARACTER.test(line[end])) {
+		end += 1
+	}
+	return end > start ? end : Math.min(start + 1, line.length)
+}
+
+// buildLineMarks groups marks by line index for symbols that actually have
+// cross-reference information.
+export function buildLineMarks(lines: string[], symbols: LspSymbol[]): Map<number, SymbolMark[]> {
+	const byLine = new Map<number, SymbolMark[]>()
+
+	for (const symbol of symbols) {
+		if (!hasLspInfo(symbol)) {
+			continue
+		}
+
+		const lineIndex = symbol.position.line
+		const line = lines[lineIndex]
+		if (line === undefined) {
+			continue
+		}
+
+		const start = Math.max(0, Math.min(symbol.position.character, line.length))
+		const end = symbolWordEnd(line, start)
+		const marks = byLine.get(lineIndex) ?? []
+		// Skip a second symbol reported at the same start (e.g. overlapping
+		// declarations) so we never render stacked bubbles on one word.
+		if (!marks.some((mark) => mark.start === start)) {
+			marks.push({ start, end, symbol })
+			byLine.set(lineIndex, marks)
+		}
+	}
+
+	for (const marks of byLine.values()) {
+		marks.sort((left, right) => left.start - right.start)
+	}
+	return byLine
+}
+
+export type LineSegment = {
+	content: string
+	color?: string
+	symbol?: LspSymbol
+	// True only for the segment that contains the mark's first character, so the
+	// bubble/popover is rendered once even when a word spans multiple tokens.
+	bubbleAnchor?: boolean
+}
+
+// splitTokensWithMarks slices syntax-highlight tokens at mark boundaries so the
+// marked portions can be wrapped with LSP affordances while preserving color.
+export function splitTokensWithMarks(
+	tokens: HighlightedToken[],
+	marks: SymbolMark[],
+): LineSegment[] {
+	if (marks.length === 0) {
+		return tokens.map((token) => ({ content: token.content, color: token.color }))
+	}
+
+	const segments: LineSegment[] = []
+	let offset = 0
+
+	for (const token of tokens) {
+		const tokenStart = offset
+		const tokenEnd = offset + token.content.length
+		let cursor = tokenStart
+
+		for (const mark of marks) {
+			if (mark.end <= cursor || mark.start >= tokenEnd) {
+				continue
+			}
+
+			const markStart = Math.max(mark.start, cursor)
+			const markEnd = Math.min(mark.end, tokenEnd)
+
+			if (markStart > cursor) {
+				segments.push({
+					content: token.content.slice(cursor - tokenStart, markStart - tokenStart),
+					color: token.color,
+				})
+			}
+			segments.push({
+				content: token.content.slice(markStart - tokenStart, markEnd - tokenStart),
+				color: token.color,
+				symbol: mark.symbol,
+				bubbleAnchor: markStart === mark.start,
+			})
+			cursor = markEnd
+		}
+
+		if (cursor < tokenEnd) {
+			segments.push({ content: token.content.slice(cursor - tokenStart), color: token.color })
+		}
+		offset = tokenEnd
+	}
+
+	return segments
+}

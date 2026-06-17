@@ -1,8 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
 import { CodeView } from './CodeView'
+import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
+
+// LSP analysis is optional: 'unsupported' means the file's language has no
+// configured language server, so no bubbles are shown and it is not an error.
+type LspState = 'idle' | 'loading' | 'ready' | 'unsupported' | 'error'
 
 type ProjectSummary = {
 	id: string
@@ -23,6 +28,8 @@ type OpenFile = {
 	state: LoadState
 	error: string
 	lines: string[]
+	lspState: LspState
+	symbols: LspSymbol[]
 	width: number | null
 	height: number | null
 	x: number
@@ -532,6 +539,8 @@ function App() {
 			state: 'loading' as LoadState,
 			error: '',
 			lines: [],
+			lspState: 'loading' as LspState,
+			symbols: [],
 			width,
 			height,
 			x,
@@ -548,6 +557,9 @@ function App() {
 		const pendingWindow = createWindow(filename)
 		setOpenFiles((current) => [...current, pendingWindow])
 		setActiveWindowID(pendingWindow.id)
+
+		// Fetch language-server info in parallel; it must not block file contents.
+		void loadLspInfo(activeProject.id, filename, pendingWindow.id)
 
 		try {
 			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/files`, {
@@ -591,6 +603,46 @@ function App() {
 						: fileWindow,
 				),
 			)
+		}
+	}
+
+	async function loadLspInfo(projectID: string, filename: string, windowID: string) {
+		const updateWindow = (changes: Partial<OpenFile>) => {
+			setOpenFiles((current) =>
+				current.map((fileWindow) =>
+					fileWindow.id === windowID ? { ...fileWindow, ...changes } : fileWindow,
+				),
+			)
+		}
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/lsp`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({ filename }),
+			})
+
+			// 400 = unsupported language (no server configured). Not an error.
+			if (response.status === 400) {
+				updateWindow({ lspState: 'unsupported', symbols: [] })
+				return
+			}
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			const analysis = parseLspAnalysis(data)
+			if (analysis === null) {
+				throw new Error('LSP response was invalid')
+			}
+
+			updateWindow({ lspState: 'ready', symbols: analysis.symbols })
+		} catch {
+			// Cross-references are an enhancement; on failure just show no bubbles.
+			updateWindow({ lspState: 'error', symbols: [] })
 		}
 	}
 
@@ -1003,7 +1055,10 @@ function App() {
 													<p className="workspace-eyebrow">{activeProject?.name ?? ''}</p>
 													<h2>{fileWindow.filename}</h2>
 												</div>
-												<p>{fileWindow.lines.length} lines</p>
+												<div className="file-window-meta">
+													<p>{fileWindow.lines.length} lines</p>
+													<LspStatusChip fileWindow={fileWindow} />
+												</div>
 											</div>
 
 											<button
@@ -1017,7 +1072,11 @@ function App() {
 										</header>
 
 										<div className="file-code-scroll">
-											<CodeView filename={fileWindow.filename} lines={fileWindow.lines} />
+											<CodeView
+												filename={fileWindow.filename}
+												lines={fileWindow.lines}
+												symbols={fileWindow.symbols}
+											/>
 										</div>
 									</>
 								)}
@@ -1147,6 +1206,26 @@ function App() {
 			) : null}
 		</div>
 	)
+}
+
+function LspStatusChip({ fileWindow }: { fileWindow: OpenFile }) {
+	switch (fileWindow.lspState) {
+		case 'loading':
+			return <p className="file-window-lsp file-window-lsp-loading">LSP…</p>
+		case 'ready': {
+			const count = fileWindow.symbols.filter(hasLspInfo).length
+			return (
+				<p className="file-window-lsp file-window-lsp-ready">
+					LSP: {count} {count === 1 ? 'symbol' : 'symbols'}
+				</p>
+			)
+		}
+		case 'error':
+			return <p className="file-window-lsp file-window-lsp-error">LSP unavailable</p>
+		default:
+			// 'idle' and 'unsupported' show nothing.
+			return null
+	}
 }
 
 export default App
