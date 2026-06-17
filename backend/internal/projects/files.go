@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -89,12 +88,13 @@ func ResolveFile(root, projectID, filename string) (Project, string, error) {
 }
 
 func ListFiles(project Project) ([]string, error) {
-	if err := markSafeDirectory(project.AbsolutePath()); err != nil {
-		return nil, err
-	}
-
+	// Mark the directory safe per-invocation with -c rather than mutating the
+	// global git config. The latter races on the global config lock when
+	// projects are listed concurrently ("could not lock config file").
 	command := exec.Command(
 		"git",
+		"-c",
+		"safe.directory="+project.AbsolutePath(),
 		"-C",
 		project.AbsolutePath(),
 		"ls-files",
@@ -126,16 +126,6 @@ func ListFiles(project Project) ([]string, error) {
 
 	slices.Sort(files)
 	return files, nil
-}
-
-func markSafeDirectory(path string) error {
-	command := exec.Command("git", "config", "--global", "--add", "safe.directory", path)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("mark safe directory: %w: %s", err, bytes.TrimSpace(output))
-	}
-
-	return nil
 }
 
 func normalizeRelativeFilePath(filename string) (string, error) {
