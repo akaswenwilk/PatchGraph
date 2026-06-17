@@ -127,30 +127,53 @@ export function symbolWordEnd(line: string, start: number): number {
 	return end > start ? end : Math.min(start + 1, line.length)
 }
 
-// buildLineMarks groups marks by line index for symbols that actually have
-// cross-reference information.
-export function buildLineMarks(lines: string[], symbols: LspSymbol[]): Map<number, SymbolMark[]> {
+// buildLineMarks groups marks by line index. For each symbol with information,
+// it marks every occurrence that falls inside the current file: the declaration
+// plus all definitions/references/implementations the server reported in this
+// file. That way usages inside function bodies are bubbled too, not just the
+// declaration line. `currentFile` is the project-relative path of the open file
+// (matching the `path` the backend returns on in-project locations).
+export function buildLineMarks(
+	lines: string[],
+	symbols: LspSymbol[],
+	currentFile: string,
+): Map<number, SymbolMark[]> {
 	const byLine = new Map<number, SymbolMark[]>()
+
+	const addMark = (lineIndex: number, character: number, symbol: LspSymbol) => {
+		const line = lines[lineIndex]
+		if (line === undefined) {
+			return
+		}
+
+		const start = Math.max(0, Math.min(character, line.length))
+		const end = symbolWordEnd(line, start)
+		const marks = byLine.get(lineIndex) ?? []
+		// Skip a second mark at the same start (the declaration usually also
+		// appears among references/definitions) so words never get stacked bubbles.
+		if (!marks.some((mark) => mark.start === start)) {
+			marks.push({ start, end, symbol })
+			byLine.set(lineIndex, marks)
+		}
+	}
 
 	for (const symbol of symbols) {
 		if (!hasLspInfo(symbol)) {
 			continue
 		}
 
-		const lineIndex = symbol.position.line
-		const line = lines[lineIndex]
-		if (line === undefined) {
-			continue
-		}
+		// The declaration position the language server reported for the symbol.
+		addMark(symbol.position.line, symbol.position.character, symbol)
 
-		const start = Math.max(0, Math.min(symbol.position.character, line.length))
-		const end = symbolWordEnd(line, start)
-		const marks = byLine.get(lineIndex) ?? []
-		// Skip a second symbol reported at the same start (e.g. overlapping
-		// declarations) so we never render stacked bubbles on one word.
-		if (!marks.some((mark) => mark.start === start)) {
-			marks.push({ start, end, symbol })
-			byLine.set(lineIndex, marks)
+		// Every other occurrence of this symbol within the current file.
+		for (const location of [
+			...symbol.definitions,
+			...symbol.references,
+			...symbol.implementations,
+		]) {
+			if (location.path === currentFile) {
+				addMark(location.range.start.line, location.range.start.character, symbol)
+			}
 		}
 	}
 
