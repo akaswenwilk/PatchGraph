@@ -7,7 +7,7 @@ import {
 } from './highlight'
 import {
 	buildLineMarks,
-	lspInfoCount,
+	referencesExcludingSelf,
 	splitTokensWithMarks,
 	type LineSegment,
 	type LspLocation,
@@ -15,6 +15,10 @@ import {
 } from './lsp'
 
 type OpenLocation = (path: string, line: number) => void
+
+// The occurrence a popover is being shown for, so its own reference can be
+// excluded from the references list.
+type CurrentOccurrence = { file: string; line: number; character: number }
 
 type CodeViewProps = {
 	filename: string
@@ -74,7 +78,10 @@ export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }
 	// Only use tokens that match the lines currently being rendered.
 	const highlighted = result?.source === lines ? result.tokens : null
 
-	const lineMarks = useMemo(() => buildLineMarks(lines, symbols ?? []), [lines, symbols])
+	const lineMarks = useMemo(
+		() => buildLineMarks(lines, symbols ?? [], filename),
+		[lines, symbols, filename],
+	)
 
 	return (
 		<div className="file-code" role="presentation">
@@ -98,6 +105,8 @@ export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }
 								<CodeSegment
 									key={segmentIndex}
 									segment={segment}
+									file={filename}
+									line={index}
 									onOpenLocation={onOpenLocation}
 								/>
 							))}
@@ -111,9 +120,13 @@ export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }
 
 function CodeSegment({
 	segment,
+	file,
+	line,
 	onOpenLocation,
 }: {
 	segment: LineSegment
+	file: string
+	line: number
 	onOpenLocation?: OpenLocation
 }) {
 	const [open, setOpen] = useState(false)
@@ -160,6 +173,7 @@ function CodeSegment({
 					{open ? (
 						<LspPopover
 							symbol={segment.symbol}
+							current={{ file, line, character: segment.markStart ?? -1 }}
 							onClose={() => setOpen(false)}
 							onOpenLocation={onOpenLocation}
 						/>
@@ -172,13 +186,20 @@ function CodeSegment({
 
 function LspPopover({
 	symbol,
+	current,
 	onClose,
 	onOpenLocation,
 }: {
 	symbol: LspSymbol
+	current: CurrentOccurrence
 	onClose: () => void
 	onOpenLocation?: OpenLocation
 }) {
+	// References include the occurrence being viewed; drop it so the list only
+	// shows other places the symbol appears.
+	const references = referencesExcludingSelf(symbol, current.file, current.line, current.character)
+	const total = symbol.definitions.length + references.length + symbol.implementations.length
+
 	return (
 		// Stop clicks inside the popover from toggling the token open state.
 		<span
@@ -208,7 +229,7 @@ function LspPopover({
 			/>
 			<LspLocationGroup
 				label="References"
-				locations={symbol.references}
+				locations={references}
 				onOpenLocation={onOpenLocation}
 			/>
 			<LspLocationGroup
@@ -216,9 +237,7 @@ function LspPopover({
 				locations={symbol.implementations}
 				onOpenLocation={onOpenLocation}
 			/>
-			{lspInfoCount(symbol) === 0 ? (
-				<span className="lsp-popover-empty">No cross-references</span>
-			) : null}
+			{total === 0 ? <span className="lsp-popover-empty">No cross-references</span> : null}
 		</span>
 	)
 }

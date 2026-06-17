@@ -222,9 +222,9 @@ func (c *client) analyzeViaSemanticTokens(
 			Name:            identifierText(lines, token),
 			Kind:            kindFromTokenType(token.Type),
 			Position:        pos,
-			Definitions:     fillPaths(root, definitions),
-			References:      fillPaths(root, c.references(ctx, uri, pos)),
-			Implementations: fillPaths(root, implementations),
+			Definitions:     keepInRepo(fillPaths(root, definitions)),
+			References:      keepInRepo(fillPaths(root, c.references(ctx, uri, pos))),
+			Implementations: keepInRepo(fillPaths(root, implementations)),
 			Occurrences:     []Range{occurrence},
 		}
 		order = append(order, key)
@@ -252,9 +252,9 @@ func (c *client) analyzeViaDocumentSymbols(ctx context.Context, root, uri string
 			Name:            sym.Name,
 			Kind:            symbolKindName(sym.Kind),
 			Position:        pos,
-			Definitions:     fillPaths(root, c.locations(ctx, "textDocument/definition", uri, pos)),
-			References:      fillPaths(root, c.references(ctx, uri, pos)),
-			Implementations: fillPaths(root, c.locations(ctx, "textDocument/implementation", uri, pos)),
+			Definitions:     keepInRepo(fillPaths(root, c.locations(ctx, "textDocument/definition", uri, pos))),
+			References:      keepInRepo(fillPaths(root, c.references(ctx, uri, pos))),
+			Implementations: keepInRepo(fillPaths(root, c.locations(ctx, "textDocument/implementation", uri, pos))),
 			Occurrences: []Range{{
 				Start: pos,
 				End:   Position{Line: pos.Line, Character: pos.Character + len(sym.Name)},
@@ -806,6 +806,19 @@ func fillPaths(root string, locations []Location) []Location {
 		locations[i].Path = relativePath(root, uriToPath(locations[i].URI))
 	}
 	return locations
+}
+
+// keepInRepo drops locations that resolve outside the project. relativePath (in
+// fillPaths) leaves the Path absolute when the file is outside root, so an
+// absolute Path marks an out-of-repo location (standard library, dependencies).
+func keepInRepo(locations []Location) []Location {
+	kept := make([]Location, 0, len(locations))
+	for _, location := range locations {
+		if !filepath.IsAbs(location.Path) {
+			kept = append(kept, location)
+		}
+	}
+	return kept
 }
 
 // --- URI / path helpers ---

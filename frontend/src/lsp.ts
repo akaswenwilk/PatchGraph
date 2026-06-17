@@ -128,6 +128,43 @@ export function lspInfoCount(symbol: LspSymbol): number {
 	return symbol.definitions.length + symbol.references.length + symbol.implementations.length
 }
 
+// locationAt reports whether a location sits exactly at the given position.
+function locationAt(location: LspLocation, file: string, line: number, character: number): boolean {
+	return (
+		location.path === file &&
+		location.range.start.line === line &&
+		location.range.start.character === character
+	)
+}
+
+// referencesExcludingSelf is the symbol's references with the occurrence
+// currently being viewed removed (the location of the bubble you opened), since
+// "a reference to the thing I'm looking at" is just itself.
+export function referencesExcludingSelf(
+	symbol: LspSymbol,
+	file: string,
+	line: number,
+	character: number,
+): LspLocation[] {
+	return symbol.references.filter((reference) => !locationAt(reference, file, line, character))
+}
+
+// occurrenceHasNavigation reports whether an occurrence leads anywhere other
+// than itself: a definition, an implementation, or some other reference. Used
+// so occurrences with nothing to navigate to (e.g. a stdlib symbol used once,
+// whose external definition was filtered out) don't get a useless bubble.
+function occurrenceHasNavigation(
+	symbol: LspSymbol,
+	file: string,
+	line: number,
+	character: number,
+): boolean {
+	if (symbol.definitions.length > 0 || symbol.implementations.length > 0) {
+		return true
+	}
+	return referencesExcludingSelf(symbol, file, line, character).length > 0
+}
+
 // A range within a single rendered line that should be marked as having LSP
 // information, plus the symbol it belongs to.
 export type SymbolMark = { start: number; end: number; symbol: LspSymbol }
@@ -148,8 +185,14 @@ export function symbolWordEnd(line: string, start: number): number {
 
 // buildLineMarks groups marks by line index. The backend reports every
 // occurrence of each symbol within the analyzed file (including usages and
-// symbols declared in other files), so we mark each occurrence range directly.
-export function buildLineMarks(lines: string[], symbols: LspSymbol[]): Map<number, SymbolMark[]> {
+// symbols declared in other files), so we mark each occurrence range directly —
+// skipping occurrences that have nowhere to navigate to. `currentFile` is the
+// open file's project-relative path, matching the `path` on in-file locations.
+export function buildLineMarks(
+	lines: string[],
+	symbols: LspSymbol[],
+	currentFile: string,
+): Map<number, SymbolMark[]> {
 	const byLine = new Map<number, SymbolMark[]>()
 
 	const addMark = (lineIndex: number, startChar: number, endChar: number, symbol: LspSymbol) => {
@@ -169,18 +212,21 @@ export function buildLineMarks(lines: string[], symbols: LspSymbol[]): Map<numbe
 		}
 	}
 
-	for (const symbol of symbols) {
-		if (!hasLspInfo(symbol)) {
-			continue
-		}
+	const occurrencesOf = (symbol: LspSymbol) =>
+		symbol.occurrences.length > 0
+			? symbol.occurrences.map((range) => ({
+					line: range.start.line,
+					startChar: range.start.character,
+					endChar: range.end.character,
+				}))
+			: [{ line: symbol.position.line, startChar: symbol.position.character, endChar: -1 }]
 
-		if (symbol.occurrences.length > 0) {
-			for (const range of symbol.occurrences) {
-				addMark(range.start.line, range.start.character, range.end.character, symbol)
+	for (const symbol of symbols) {
+		for (const occurrence of occurrencesOf(symbol)) {
+			if (!occurrenceHasNavigation(symbol, currentFile, occurrence.line, occurrence.startChar)) {
+				continue
 			}
-		} else {
-			// Fallback: mark just the declaration position.
-			addMark(symbol.position.line, symbol.position.character, -1, symbol)
+			addMark(occurrence.line, occurrence.startChar, occurrence.endChar, symbol)
 		}
 	}
 
@@ -197,6 +243,9 @@ export type LineSegment = {
 	// True only for the segment that contains the mark's first character, so the
 	// bubble/popover is rendered once even when a word spans multiple tokens.
 	bubbleAnchor?: boolean
+	// Start character of the mark, set on the anchor segment so the popover can
+	// identify which occurrence it belongs to.
+	markStart?: number
 }
 
 // splitTokensWithMarks slices syntax-highlight tokens at mark boundaries so the
@@ -236,6 +285,7 @@ export function splitTokensWithMarks(
 				color: token.color,
 				symbol: mark.symbol,
 				bubbleAnchor: markStart === mark.start,
+				markStart: markStart === mark.start ? mark.start : undefined,
 			})
 			cursor = markEnd
 		}

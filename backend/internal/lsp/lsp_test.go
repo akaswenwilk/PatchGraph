@@ -238,19 +238,31 @@ func Use() string {
 		t.Errorf("Greet references = %d, want >= 2", len(greet.References))
 	}
 
-	// Sprintf is declared in the standard library (another file/package), yet it
-	// is still resolved and marked, with a definition pointing outside this file.
+	// Out-of-repo locations are filtered out: every reported location is a
+	// project-relative path, never an absolute one (stdlib/dependencies).
+	for _, sym := range analysis.Symbols {
+		for _, group := range [][]Location{sym.Definitions, sym.References, sym.Implementations} {
+			for _, loc := range group {
+				if filepath.IsAbs(loc.Path) {
+					t.Errorf("symbol %q has out-of-repo location %q", sym.Name, loc.Path)
+				}
+			}
+		}
+	}
+
+	// Sprintf is from the standard library: it is still resolved (so its in-repo
+	// call site is marked), but its external definition has been filtered out.
 	sprintf := findSymbol(analysis.Symbols, func(s SymbolInfo) bool {
 		return s.Name == "Sprintf"
 	})
 	if sprintf == nil {
 		t.Fatalf("Sprintf not found in %v", symbolNames(analysis.Symbols))
 	}
-	if len(sprintf.Definitions) == 0 {
-		t.Fatal("Sprintf has no definitions")
+	if len(sprintf.Definitions) != 0 {
+		t.Errorf("Sprintf definitions = %d, want 0 (external definition filtered)", len(sprintf.Definitions))
 	}
-	if sprintf.Definitions[0].Path == "sample.go" {
-		t.Errorf("Sprintf definition path = %q, want a path outside sample.go", sprintf.Definitions[0].Path)
+	if len(sprintf.References) == 0 {
+		t.Error("Sprintf should keep its in-repo call-site reference")
 	}
 }
 
