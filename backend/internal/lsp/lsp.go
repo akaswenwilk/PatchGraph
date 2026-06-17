@@ -54,8 +54,11 @@ type Location struct {
 	Range Range  `json:"range"`
 }
 
-// SymbolInfo describes a single symbol declared in the analyzed file along with
-// the cross-references the language server reported for it.
+// SymbolInfo describes a single symbol referenced in the analyzed file along
+// with the cross-references the language server reported for it. Occurrences
+// lists every place the symbol appears within this file (so the same symbol's
+// usages can all be marked), while Definitions/References/Implementations may
+// point anywhere in the workspace.
 type SymbolInfo struct {
 	Name            string     `json:"name"`
 	Kind            string     `json:"kind"`
@@ -63,6 +66,7 @@ type SymbolInfo struct {
 	Definitions     []Location `json:"definitions"`
 	References      []Location `json:"references"`
 	Implementations []Location `json:"implementations"`
+	Occurrences     []Range    `json:"occurrences"`
 }
 
 // FileAnalysis is the full LSP result for a single file.
@@ -93,8 +97,15 @@ func LanguageForFile(name string) (command []string, languageID string, ok bool)
 	}
 }
 
-// Analyze launches the language server, opens absFile, enumerates its symbols,
-// and collects the definitions, references, and implementations for each.
+// maxAnalyzedTokens bounds how many identifier tokens a single file analysis
+// will resolve, so a pathologically large file can't fan out into an unbounded
+// number of language-server queries.
+const maxAnalyzedTokens = 2000
+
+// Analyze launches the language server, opens absFile, enumerates every
+// identifier in it, and collects the definitions, references, and
+// implementations for each distinct symbol — including symbols declared in
+// other files or packages.
 //
 // root is the workspace/project root, absFile the absolute path to the file,
 // languageID the LSP language identifier, and command the server invocation
@@ -104,6 +115,7 @@ func Analyze(ctx context.Context, root, absFile, languageID string, command []st
 	if err != nil {
 		return FileAnalysis{}, err
 	}
+	lines := splitLines(string(content))
 
 	c, err := startClient(ctx, command, root)
 	if err != nil {
@@ -111,7 +123,8 @@ func Analyze(ctx context.Context, root, absFile, languageID string, command []st
 	}
 	defer c.Close()
 
-	if err := c.initialize(ctx, root); err != nil {
+	legend, err := c.initialize(ctx, root)
+	if err != nil {
 		return FileAnalysis{}, fmt.Errorf("initialize: %w", err)
 	}
 
@@ -127,30 +140,128 @@ func Analyze(ctx context.Context, root, absFile, languageID string, command []st
 		return FileAnalysis{}, fmt.Errorf("didOpen: %w", err)
 	}
 
-	symbols, err := c.documentSymbols(ctx, uri)
-	if err != nil {
-		return FileAnalysis{}, fmt.Errorf("documentSymbol: %w", err)
+	// Prefer semantic tokens (covers every identifier, including cross-file
+	// symbols); fall back to document symbols if the server has no token legend.
+	var symbols []SymbolInfo
+	if len(legend) > 0 {
+		symbols, err = c.analyzeViaSemanticTokens(ctx, root, uri, lines, legend)
+		if err != nil {
+			return FileAnalysis{}, fmt.Errorf("semanticTokens: %w", err)
+		}
+	}
+	if len(symbols) == 0 {
+		symbols, err = c.analyzeViaDocumentSymbols(ctx, root, uri)
+		if err != nil {
+			return FileAnalysis{}, fmt.Errorf("documentSymbol: %w", err)
+		}
 	}
 
-	analysis := FileAnalysis{
+	return FileAnalysis{
 		File:     relativePath(root, absFile),
 		Language: languageID,
-		Symbols:  make([]SymbolInfo, 0, len(symbols)),
+		Symbols:  symbols,
+	}, nil
+}
+
+// analyzeViaSemanticTokens resolves every identifier token in the file. Tokens
+// are grouped by the symbol they resolve to (via go-to-definition) so that
+// references/implementations are fetched once per symbol, while every token's
+// position is recorded as an occurrence to mark.
+func (c *client) analyzeViaSemanticTokens(
+	ctx context.Context,
+	root, uri string,
+	lines, legend []string,
+) ([]SymbolInfo, error) {
+	data, err := c.semanticTokens(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	tokens := decodeSemanticTokens(data, legend)
+
+	order := make([]string, 0)
+	bySymbol := make(map[string]*SymbolInfo)
+	resolved := 0
+
+	for _, token := range tokens {
+		if !identifierTokenTypes[token.Type] {
+			continue
+		}
+		if resolved >= maxAnalyzedTokens {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		resolved++
+
+		pos := Position{Line: token.Line, Character: token.Char}
+		definitions := c.locations(ctx, "textDocument/definition", uri, pos)
+		if len(definitions) == 0 {
+			continue
+		}
+
+		occurrence := Range{
+			Start: pos,
+			End:   Position{Line: token.Line, Character: token.Char + token.Length},
+		}
+		key := definitions[0].URI + "#" +
+			strconv.Itoa(definitions[0].Range.Start.Line) + ":" +
+			strconv.Itoa(definitions[0].Range.Start.Character)
+
+		if existing, ok := bySymbol[key]; ok {
+			existing.Occurrences = append(existing.Occurrences, occurrence)
+			continue
+		}
+
+		var implementations []Location
+		if implementableTokenTypes[token.Type] {
+			implementations = c.locations(ctx, "textDocument/implementation", uri, pos)
+		}
+
+		bySymbol[key] = &SymbolInfo{
+			Name:            identifierText(lines, token),
+			Kind:            kindFromTokenType(token.Type),
+			Position:        pos,
+			Definitions:     fillPaths(root, definitions),
+			References:      fillPaths(root, c.references(ctx, uri, pos)),
+			Implementations: fillPaths(root, implementations),
+			Occurrences:     []Range{occurrence},
+		}
+		order = append(order, key)
 	}
 
-	for _, sym := range symbols {
-		info := SymbolInfo{
+	symbols := make([]SymbolInfo, 0, len(order))
+	for _, key := range order {
+		symbols = append(symbols, *bySymbol[key])
+	}
+	return symbols, nil
+}
+
+// analyzeViaDocumentSymbols is the fallback used when the server exposes no
+// semantic-token legend. It marks each declared symbol at its declaration.
+func (c *client) analyzeViaDocumentSymbols(ctx context.Context, root, uri string) ([]SymbolInfo, error) {
+	declared, err := c.documentSymbols(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+
+	symbols := make([]SymbolInfo, 0, len(declared))
+	for _, sym := range declared {
+		pos := sym.Position
+		symbols = append(symbols, SymbolInfo{
 			Name:            sym.Name,
 			Kind:            symbolKindName(sym.Kind),
-			Position:        sym.Position,
-			Definitions:     fillPaths(root, c.locations(ctx, "textDocument/definition", uri, sym.Position)),
-			References:      fillPaths(root, c.references(ctx, uri, sym.Position)),
-			Implementations: fillPaths(root, c.locations(ctx, "textDocument/implementation", uri, sym.Position)),
-		}
-		analysis.Symbols = append(analysis.Symbols, info)
+			Position:        pos,
+			Definitions:     fillPaths(root, c.locations(ctx, "textDocument/definition", uri, pos)),
+			References:      fillPaths(root, c.references(ctx, uri, pos)),
+			Implementations: fillPaths(root, c.locations(ctx, "textDocument/implementation", uri, pos)),
+			Occurrences: []Range{{
+				Start: pos,
+				End:   Position{Line: pos.Line, Character: pos.Character + len(sym.Name)},
+			}},
+		})
 	}
-
-	return analysis, nil
+	return symbols, nil
 }
 
 // --- JSON-RPC client ---
@@ -375,24 +486,93 @@ func (c *client) Close() error {
 
 // --- LSP request helpers ---
 
-func (c *client) initialize(ctx context.Context, root string) error {
+// standardTokenTypes is the set of semantic token types the client advertises
+// support for. The server replies with its own legend (an ordered list whose
+// indices the token data references), which we read from the initialize result.
+var standardTokenTypes = []string{
+	"namespace", "type", "class", "enum", "interface", "struct", "typeParameter",
+	"parameter", "variable", "property", "enumMember", "event", "function",
+	"method", "member", "macro", "keyword", "modifier", "comment", "string",
+	"number", "regexp", "operator", "decorator",
+}
+
+// initialize performs the LSP handshake and returns the server's semantic-token
+// legend (token type names by index), which is empty if unsupported.
+func (c *client) initialize(ctx context.Context, root string) ([]string, error) {
 	params := map[string]any{
 		"processId": os.Getpid(),
 		"rootUri":   pathToURI(root),
+		// gopls disables semantic tokens unless enabled via this setting.
+		"initializationOptions": map[string]any{"semanticTokens": true},
 		"capabilities": map[string]any{
 			"textDocument": map[string]any{
 				"documentSymbol": map[string]any{"hierarchicalDocumentSymbolSupport": true},
 				"definition":     map[string]any{"linkSupport": true},
 				"references":     map[string]any{},
 				"implementation": map[string]any{"linkSupport": true},
+				"semanticTokens": map[string]any{
+					"requests":       map[string]any{"full": true},
+					"tokenTypes":     standardTokenTypes,
+					"tokenModifiers": []string{},
+					"formats":        []string{"relative"},
+				},
 			},
 			"workspace": map[string]any{"configuration": true},
 		},
 	}
-	if _, err := c.call(ctx, "initialize", params); err != nil {
-		return err
+	raw, err := c.call(ctx, "initialize", params)
+	if err != nil {
+		return nil, err
 	}
-	return c.notify("initialized", map[string]any{})
+
+	var result struct {
+		Capabilities struct {
+			SemanticTokensProvider json.RawMessage `json:"semanticTokensProvider"`
+		} `json:"capabilities"`
+	}
+	_ = json.Unmarshal(raw, &result)
+	legend := parseSemanticLegend(result.Capabilities.SemanticTokensProvider)
+
+	if err := c.notify("initialized", map[string]any{}); err != nil {
+		return nil, err
+	}
+	return legend, nil
+}
+
+func parseSemanticLegend(raw json.RawMessage) []string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || trimmed == "false" {
+		return nil
+	}
+	var provider struct {
+		Legend struct {
+			TokenTypes []string `json:"tokenTypes"`
+		} `json:"legend"`
+	}
+	if err := json.Unmarshal(raw, &provider); err != nil {
+		return nil
+	}
+	return provider.Legend.TokenTypes
+}
+
+func (c *client) semanticTokens(ctx context.Context, uri string) ([]uint32, error) {
+	raw, err := c.call(ctx, "textDocument/semanticTokens/full", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		return nil, nil
+	}
+
+	var result struct {
+		Data []uint32 `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return result.Data, nil
 }
 
 func (c *client) documentSymbols(ctx context.Context, uri string) ([]flatSymbol, error) {
@@ -436,6 +616,99 @@ func textDocumentPositionParams(uri string, pos Position) map[string]any {
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": pos.Line, "character": pos.Character},
 	}
+}
+
+// --- Semantic tokens ---
+
+// identifierTokenTypes are the semantic token types we treat as nameable
+// symbols worth resolving. Keywords, comments, strings, numbers, and operators
+// are excluded.
+var identifierTokenTypes = map[string]bool{
+	"namespace": true, "type": true, "class": true, "enum": true,
+	"interface": true, "struct": true, "typeParameter": true, "parameter": true,
+	"variable": true, "property": true, "enumMember": true, "event": true,
+	"function": true, "method": true, "member": true, "decorator": true,
+	"macro": true,
+}
+
+// implementableTokenTypes are the token types for which asking for
+// implementations is meaningful.
+var implementableTokenTypes = map[string]bool{
+	"type": true, "class": true, "interface": true, "struct": true, "method": true,
+}
+
+type semanticToken struct {
+	Line   int
+	Char   int
+	Length int
+	Type   string
+}
+
+// decodeSemanticTokens expands the LSP delta-encoded token stream (groups of 5
+// integers: deltaLine, deltaStartChar, length, tokenType, tokenModifiers) into
+// absolute-positioned tokens with their type name resolved via the legend.
+func decodeSemanticTokens(data []uint32, legend []string) []semanticToken {
+	tokens := make([]semanticToken, 0, len(data)/5)
+	line, char := 0, 0
+
+	for i := 0; i+4 < len(data); i += 5 {
+		deltaLine := int(data[i])
+		deltaStart := int(data[i+1])
+		length := int(data[i+2])
+		typeIndex := int(data[i+3])
+
+		if deltaLine == 0 {
+			char += deltaStart
+		} else {
+			line += deltaLine
+			char = deltaStart
+		}
+
+		typeName := ""
+		if typeIndex >= 0 && typeIndex < len(legend) {
+			typeName = legend[typeIndex]
+		}
+
+		tokens = append(tokens, semanticToken{Line: line, Char: char, Length: length, Type: typeName})
+	}
+
+	return tokens
+}
+
+// identifierText returns the source text covered by a token, used as the
+// symbol's display name.
+func identifierText(lines []string, token semanticToken) string {
+	if token.Line < 0 || token.Line >= len(lines) {
+		return ""
+	}
+	line := lines[token.Line]
+	start := token.Char
+	end := token.Char + token.Length
+	if start < 0 {
+		start = 0
+	}
+	if end > len(line) {
+		end = len(line)
+	}
+	if start >= end {
+		return ""
+	}
+	return line[start:end]
+}
+
+func kindFromTokenType(tokenType string) string {
+	if tokenType == "" {
+		return "Symbol"
+	}
+	return strings.ToUpper(tokenType[:1]) + tokenType[1:]
+}
+
+func splitLines(text string) []string {
+	lines := strings.Split(text, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSuffix(lines[i], "\r")
+	}
+	return lines
 }
 
 // --- Symbol handling ---

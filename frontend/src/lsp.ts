@@ -11,6 +11,8 @@ export type LspSymbol = {
 	definitions: LspLocation[]
 	references: LspLocation[]
 	implementations: LspLocation[]
+	// Every place this symbol appears within the analyzed file (to mark each).
+	occurrences: LspRange[]
 }
 export type LspAnalysis = {
 	file: string
@@ -42,12 +44,27 @@ function isLocation(value: unknown): value is LspLocation {
 	)
 }
 
+function isRange(value: unknown): value is LspRange {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+	const candidate = value as Record<string, unknown>
+	return isPosition(candidate.start) && isPosition(candidate.end)
+}
+
 function isLocationArray(value: unknown): value is LspLocation[] {
 	// The backend uses JSON null for empty location sets.
 	if (value === null) {
 		return true
 	}
 	return Array.isArray(value) && value.every(isLocation)
+}
+
+function isRangeArray(value: unknown): value is LspRange[] {
+	if (value === null) {
+		return true
+	}
+	return Array.isArray(value) && value.every(isRange)
 }
 
 function isSymbol(value: unknown): value is LspSymbol {
@@ -61,18 +78,20 @@ function isSymbol(value: unknown): value is LspSymbol {
 		isPosition(candidate.position) &&
 		isLocationArray(candidate.definitions) &&
 		isLocationArray(candidate.references) &&
-		isLocationArray(candidate.implementations)
+		isLocationArray(candidate.implementations) &&
+		isRangeArray(candidate.occurrences)
 	)
 }
 
-// normalizeSymbol coerces null location sets to empty arrays so the rest of the
-// UI can treat them uniformly.
+// normalizeSymbol coerces null location/occurrence sets to empty arrays so the
+// rest of the UI can treat them uniformly.
 function normalizeSymbol(symbol: LspSymbol): LspSymbol {
 	return {
 		...symbol,
 		definitions: symbol.definitions ?? [],
 		references: symbol.references ?? [],
 		implementations: symbol.implementations ?? [],
+		occurrences: symbol.occurrences ?? [],
 	}
 }
 
@@ -127,30 +146,23 @@ export function symbolWordEnd(line: string, start: number): number {
 	return end > start ? end : Math.min(start + 1, line.length)
 }
 
-// buildLineMarks groups marks by line index. For each symbol with information,
-// it marks every occurrence that falls inside the current file: the declaration
-// plus all definitions/references/implementations the server reported in this
-// file. That way usages inside function bodies are bubbled too, not just the
-// declaration line. `currentFile` is the project-relative path of the open file
-// (matching the `path` the backend returns on in-project locations).
-export function buildLineMarks(
-	lines: string[],
-	symbols: LspSymbol[],
-	currentFile: string,
-): Map<number, SymbolMark[]> {
+// buildLineMarks groups marks by line index. The backend reports every
+// occurrence of each symbol within the analyzed file (including usages and
+// symbols declared in other files), so we mark each occurrence range directly.
+export function buildLineMarks(lines: string[], symbols: LspSymbol[]): Map<number, SymbolMark[]> {
 	const byLine = new Map<number, SymbolMark[]>()
 
-	const addMark = (lineIndex: number, character: number, symbol: LspSymbol) => {
+	const addMark = (lineIndex: number, startChar: number, endChar: number, symbol: LspSymbol) => {
 		const line = lines[lineIndex]
 		if (line === undefined) {
 			return
 		}
 
-		const start = Math.max(0, Math.min(character, line.length))
-		const end = symbolWordEnd(line, start)
+		const start = Math.max(0, Math.min(startChar, line.length))
+		// Trust the reported end when sane, else expand across the identifier.
+		const end = endChar > start ? Math.min(endChar, line.length) : symbolWordEnd(line, start)
 		const marks = byLine.get(lineIndex) ?? []
-		// Skip a second mark at the same start (the declaration usually also
-		// appears among references/definitions) so words never get stacked bubbles.
+		// Skip a second mark at the same start so words never get stacked bubbles.
 		if (!marks.some((mark) => mark.start === start)) {
 			marks.push({ start, end, symbol })
 			byLine.set(lineIndex, marks)
@@ -162,18 +174,13 @@ export function buildLineMarks(
 			continue
 		}
 
-		// The declaration position the language server reported for the symbol.
-		addMark(symbol.position.line, symbol.position.character, symbol)
-
-		// Every other occurrence of this symbol within the current file.
-		for (const location of [
-			...symbol.definitions,
-			...symbol.references,
-			...symbol.implementations,
-		]) {
-			if (location.path === currentFile) {
-				addMark(location.range.start.line, location.range.start.character, symbol)
+		if (symbol.occurrences.length > 0) {
+			for (const range of symbol.occurrences) {
+				addMark(range.start.line, range.start.character, range.end.character, symbol)
 			}
+		} else {
+			// Fallback: mark just the declaration position.
+			addMark(symbol.position.line, symbol.position.character, -1, symbol)
 		}
 	}
 

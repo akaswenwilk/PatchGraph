@@ -38,7 +38,7 @@ test('opening a Go file marks symbols with language-server bubbles', async ({ pa
 	await markedWord.click()
 	const popover = viewer.locator('.lsp-popover').first()
 	await expect(popover).toBeVisible()
-	await expect(popover).toContainText('References')
+	await expect(popover).toContainText('Definitions')
 
 	// The popover stays open until explicitly closed via its × button.
 	await viewer.getByRole('heading', { name: 'lib.go' }).hover()

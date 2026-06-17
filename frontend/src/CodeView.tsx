@@ -74,10 +74,7 @@ export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }
 	// Only use tokens that match the lines currently being rendered.
 	const highlighted = result?.source === lines ? result.tokens : null
 
-	const lineMarks = useMemo(
-		() => buildLineMarks(lines, symbols ?? [], filename),
-		[lines, symbols, filename],
-	)
+	const lineMarks = useMemo(() => buildLineMarks(lines, symbols ?? []), [lines, symbols])
 
 	return (
 		<div className="file-code" role="presentation">
