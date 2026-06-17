@@ -45,23 +45,9 @@ func Get(root, id string) (Detail, error) {
 }
 
 func ReadFileLines(root, projectID, filename string) ([]string, error) {
-	project, err := FindByID(root, projectID)
+	_, absPath, err := ResolveFile(root, projectID, filename)
 	if err != nil {
 		return nil, err
-	}
-
-	cleanFilename, err := normalizeRelativeFilePath(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	absPath := filepath.Join(project.AbsolutePath(), cleanFilename)
-	relPath, err := filepath.Rel(project.AbsolutePath(), absPath)
-	if err != nil {
-		return nil, err
-	}
-	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
-		return nil, ErrFileOutsideProject
 	}
 
 	file, err := os.Open(absPath)
@@ -71,6 +57,35 @@ func ReadFileLines(root, projectID, filename string) ([]string, error) {
 	defer file.Close()
 
 	return readLines(file)
+}
+
+// ResolveFile locates a project and returns the validated absolute path to a
+// file within it. The path is guaranteed not to escape the project root.
+func ResolveFile(root, projectID, filename string) (Project, string, error) {
+	project, err := FindByID(root, projectID)
+	if err != nil {
+		return Project{}, "", err
+	}
+
+	cleanFilename, err := normalizeRelativeFilePath(filename)
+	if err != nil {
+		return Project{}, "", err
+	}
+
+	absPath := filepath.Join(project.AbsolutePath(), cleanFilename)
+	relPath, err := filepath.Rel(project.AbsolutePath(), absPath)
+	if err != nil {
+		return Project{}, "", err
+	}
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		return Project{}, "", ErrFileOutsideProject
+	}
+
+	if _, err := os.Stat(absPath); err != nil {
+		return Project{}, "", err
+	}
+
+	return project, absPath, nil
 }
 
 func ListFiles(project Project) ([]string, error) {

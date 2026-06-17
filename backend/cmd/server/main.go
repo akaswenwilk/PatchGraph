@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,7 +11,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/akaswenwilk/PatchGraph/backend/internal/lsp"
 	"github.com/akaswenwilk/PatchGraph/backend/internal/projects"
 )
 
@@ -22,7 +25,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":" + port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -58,10 +61,37 @@ func fileHandler(projectID string, filename string) ([]string, error) {
 	return projects.ReadFileLines(root, projectID, filename)
 }
 
+// lspDefaultTimeout bounds a single LSP analysis. Cold language server startup
+// and indexing can be slow, so it is generous.
+const lspDefaultTimeout = 90 * time.Second
+
+func lspHandler(projectID string, filename string) (lsp.FileAnalysis, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return lsp.FileAnalysis{}, err
+	}
+
+	command, languageID, ok := lsp.LanguageForFile(filename)
+	if !ok {
+		return lsp.FileAnalysis{}, lsp.ErrUnsupportedLanguage
+	}
+
+	project, absPath, err := projects.ResolveFile(root, projectID, filename)
+	if err != nil {
+		return lsp.FileAnalysis{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), lspDefaultTimeout)
+	defer cancel()
+
+	return lsp.Analyze(ctx, project.AbsolutePath(), absPath, languageID, command)
+}
+
 func newMux(
 	listProjects func() ([]projects.Project, error),
 	getProject func(string) (projects.Detail, error),
 	readFile func(string, string) ([]string, error),
+	analyzeFile func(string, string) (lsp.FileAnalysis, error),
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -96,10 +126,12 @@ func newMux(
 			writeProjectResponse(w, projectID, getProject)
 		case remainder == "files" && r.Method == http.MethodPost:
 			writeFileResponse(w, r, projectID, readFile)
+		case remainder == "lsp" && r.Method == http.MethodPost:
+			writeLSPResponse(w, r, projectID, analyzeFile)
 		case remainder == "":
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		case remainder == "files":
+		case remainder == "files", remainder == "lsp":
 			w.Header().Set("Allow", http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		default:
@@ -132,6 +164,63 @@ func writeFileResponse(
 	projectID string,
 	readFile func(string, string) ([]string, error),
 ) {
+	filename, ok := decodeFilenameRequest(w, r)
+	if !ok {
+		return
+	}
+
+	lines, err := readFile(projectID, filename)
+	if err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			http.Error(w, "file not found", http.StatusNotFound)
+		case errors.Is(err, projects.ErrInvalidFilePath), errors.Is(err, projects.ErrFileOutsideProject):
+			http.Error(w, "file not found", http.StatusNotFound)
+		default:
+			log.Printf("failed to read file %s in project %s: %v", filename, projectID, err)
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	writeJSON(w, lines)
+}
+
+func writeLSPResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID string,
+	analyzeFile func(string, string) (lsp.FileAnalysis, error),
+) {
+	filename, ok := decodeFilenameRequest(w, r)
+	if !ok {
+		return
+	}
+
+	analysis, err := analyzeFile(projectID, filename)
+	if err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist),
+			errors.Is(err, projects.ErrInvalidFilePath),
+			errors.Is(err, projects.ErrFileOutsideProject):
+			http.Error(w, "file not found", http.StatusNotFound)
+		case errors.Is(err, lsp.ErrUnsupportedLanguage):
+			http.Error(w, "unsupported file type", http.StatusBadRequest)
+		case errors.Is(err, lsp.ErrServerUnavailable):
+			http.Error(w, "language server unavailable", http.StatusServiceUnavailable)
+		default:
+			log.Printf("failed to analyze file %s in project %s: %v", filename, projectID, err)
+			http.Error(w, "failed to analyze file", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	writeJSON(w, analysis)
+}
+
+// decodeFilenameRequest reads the shared {"filename": "..."} POST body. On a
+// malformed body it writes a 400 response and returns ok=false.
+func decodeFilenameRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
 	defer r.Body.Close()
 
 	var request struct {
@@ -142,28 +231,14 @@ func writeFileResponse(
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
+		return "", false
 	}
 	if err := decoder.Decode(new(struct{})); !errors.Is(err, io.EOF) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
+		return "", false
 	}
 
-	lines, err := readFile(projectID, request.Filename)
-	if err != nil {
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			http.Error(w, "file not found", http.StatusNotFound)
-		case errors.Is(err, projects.ErrInvalidFilePath), errors.Is(err, projects.ErrFileOutsideProject):
-			http.Error(w, "file not found", http.StatusNotFound)
-		default:
-			log.Printf("failed to read file %s in project %s: %v", request.Filename, projectID, err)
-			http.Error(w, "failed to read file", http.StatusInternalServerError)
-		}
-		return
-	}
-
-	writeJSON(w, lines)
+	return request.Filename, true
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
