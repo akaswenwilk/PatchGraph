@@ -46,9 +46,11 @@ const WINDOW_MARGIN = 24
 // 288px sidebar + 24px) at scroll origin so windows never open under it.
 const WINDOW_BASE_X = 336
 const WINDOW_BASE_Y = 24
-// Extra breathing room added past the furthest window so the canvas can always
-// scroll a little beyond its content, Miro-style.
-const CANVAS_PADDING = 120
+// Empty space kept on every side of the window cluster so the canvas can always
+// be panned around, Miro-style, even with a single window or a couple of windows
+// sitting side by side. The canvas is sized to content + this margin on all four
+// sides, and windows render offset by it so there is room above/left of them too.
+const PAN_MARGIN = 2000
 // Ctrl+wheel zoom of the canvas (windows + their text). The file explorer lives
 // outside the canvas, so it is never scaled.
 const MIN_ZOOM = 0.25
@@ -56,6 +58,12 @@ const MAX_ZOOM = 3
 // Per-wheel-notch sensitivity; multiplied into an exponential so zooming feels
 // uniform at every scale.
 const ZOOM_WHEEL_SENSITIVITY = 0.0015
+// Fixed-size overview map pinned at the top-right. The whole logical canvas is
+// scaled to fit inside this box (aspect preserved), windows are drawn as little
+// rectangles, and the current viewport is outlined; clicking/dragging in it pans
+// the real view. Like the Miro minimap / Xcode storyboard overview.
+const MINIMAP_MAX_WIDTH = 220
+const MINIMAP_MAX_HEIGHT = 160
 
 function clampZoom(value: number) {
 	return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
@@ -283,6 +291,122 @@ function TreeBranch({
 	)
 }
 
+function Minimap({
+	canvasWidth,
+	canvasHeight,
+	zoom,
+	openFiles,
+	activeWindowID,
+	viewport,
+	onNavigate,
+}: {
+	canvasWidth: number
+	canvasHeight: number
+	zoom: number
+	openFiles: OpenFile[]
+	activeWindowID: string | null
+	viewport: { scrollLeft: number; scrollTop: number; width: number; height: number }
+	onNavigate: (logicalX: number, logicalY: number) => void
+}) {
+	const mapRef = useRef<HTMLDivElement | null>(null)
+	const isDraggingRef = useRef(false)
+
+	// Single scale that fits the whole canvas inside the box with aspect intact.
+	const scale = Math.min(MINIMAP_MAX_WIDTH / canvasWidth, MINIMAP_MAX_HEIGHT / canvasHeight)
+	const mapWidth = canvasWidth * scale
+	const mapHeight = canvasHeight * scale
+
+	// The visible viewport, expressed in logical canvas units (scrollLeft is in
+	// scaled screen px, so divide by zoom), then scaled into the minimap.
+	const viewLeft = (viewport.scrollLeft / zoom) * scale
+	const viewTop = (viewport.scrollTop / zoom) * scale
+	const viewWidth = (viewport.width / zoom) * scale
+	const viewHeight = (viewport.height / zoom) * scale
+
+	const navigateFromEvent = (clientX: number, clientY: number) => {
+		const node = mapRef.current
+		if (node === null) {
+			return
+		}
+
+		const rect = node.getBoundingClientRect()
+		const localX = clientX - rect.left
+		const localY = clientY - rect.top
+		// Map back from minimap px to logical canvas coords; App centers the view.
+		onNavigate(localX / scale, localY / scale)
+	}
+
+	const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+		event.preventDefault()
+		isDraggingRef.current = true
+		event.currentTarget.setPointerCapture(event.pointerId)
+		navigateFromEvent(event.clientX, event.clientY)
+	}
+
+	const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+		if (!isDraggingRef.current) {
+			return
+		}
+		navigateFromEvent(event.clientX, event.clientY)
+	}
+
+	const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+		isDraggingRef.current = false
+		if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+			event.currentTarget.releasePointerCapture(event.pointerId)
+		}
+	}
+
+	return (
+		<div className="minimap" aria-hidden="true">
+			<div
+				ref={mapRef}
+				className="minimap-canvas"
+				style={{ width: `${mapWidth}px`, height: `${mapHeight}px` }}
+				onPointerDown={handlePointerDown}
+				onPointerMove={handlePointerMove}
+				onPointerUp={handlePointerUp}
+				onPointerCancel={handlePointerUp}
+			>
+				{openFiles.map((fileWindow) => {
+					const basename =
+						fileWindow.filename.split('/').pop() ?? fileWindow.filename
+					return (
+						<div
+							key={fileWindow.id}
+							className={
+								fileWindow.id === activeWindowID
+									? 'minimap-window minimap-window-active'
+									: 'minimap-window'
+							}
+							style={{
+								left: `${(fileWindow.x + PAN_MARGIN) * scale}px`,
+								top: `${(fileWindow.y + PAN_MARGIN) * scale}px`,
+								width: `${(fileWindow.width ?? DEFAULT_WINDOW_WIDTH) * scale}px`,
+								height: `${(fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) * scale}px`,
+							}}
+						>
+							<span className="minimap-window-label" title={fileWindow.filename}>
+								{basename}
+							</span>
+						</div>
+					)
+				})}
+
+				<div
+					className="minimap-viewport"
+					style={{
+						left: `${viewLeft}px`,
+						top: `${viewTop}px`,
+						width: `${viewWidth}px`,
+						height: `${viewHeight}px`,
+					}}
+				/>
+			</div>
+		</div>
+	)
+}
+
 function App() {
 	const [isCollapsed, setIsCollapsed] = useState(false)
 	const [isModalOpen, setIsModalOpen] = useState(false)
@@ -300,6 +424,10 @@ function App() {
 	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
 	const [zoom, setZoom] = useState(1)
 	const [isHelpOpen, setIsHelpOpen] = useState(false)
+	// Live viewport (scroll offset + visible size) of the scroll container, kept in
+	// state so the minimap can redraw the "where am I" rectangle as the user scrolls,
+	// zooms, or resizes the window.
+	const [viewport, setViewport] = useState({ scrollLeft: 0, scrollTop: 0, width: 0, height: 0 })
 	const nextWindowIDRef = useRef(1)
 	const nextZIndexRef = useRef(1)
 	const workspaceRef = useRef<HTMLElement | null>(null)
@@ -432,6 +560,70 @@ function App() {
 		workspace.scrollTop = pending.top
 		pendingScrollRef.current = null
 	}, [zoom])
+
+	// Open scrolled to the logical content origin so the empty top/left pan margin
+	// starts off-screen — the view looks unchanged on load, but the user can now
+	// scroll up/left into the margin (and right/down past content) to pan around
+	// freely, even with a single window. Runs once on mount.
+	useLayoutEffect(() => {
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		workspace.scrollLeft = PAN_MARGIN
+		workspace.scrollTop = PAN_MARGIN
+	}, [])
+
+	// Keep `viewport` in sync with the scroll container. Programmatic scrolls (the
+	// mount origin jump, zoom-to-cursor correction, drag auto-scroll, minimap
+	// navigation) all fire 'scroll', so this one listener covers every case; the
+	// ResizeObserver handles window/container resizes.
+	useEffect(() => {
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		const sync = () => {
+			setViewport({
+				scrollLeft: workspace.scrollLeft,
+				scrollTop: workspace.scrollTop,
+				width: workspace.clientWidth,
+				height: workspace.clientHeight,
+			})
+		}
+
+		sync()
+		workspace.addEventListener('scroll', sync, { passive: true })
+		const observer = new ResizeObserver(sync)
+		observer.observe(workspace)
+		return () => {
+			workspace.removeEventListener('scroll', sync)
+			observer.disconnect()
+		}
+	}, [])
+
+	// Center the view on a logical canvas point (minimap click/drag). scrollLeft is
+	// in scaled screen px, so multiply the logical point by zoom, then offset by half
+	// the viewport to center it; clamp to the scrollable range.
+	function centerViewOn(logicalX: number, logicalY: number) {
+		const workspace = workspaceRef.current
+		if (workspace === null) {
+			return
+		}
+
+		const targetLeft = logicalX * zoomRef.current - workspace.clientWidth / 2
+		const targetTop = logicalY * zoomRef.current - workspace.clientHeight / 2
+		workspace.scrollLeft = Math.max(
+			0,
+			Math.min(targetLeft, workspace.scrollWidth - workspace.clientWidth),
+		)
+		workspace.scrollTop = Math.max(
+			0,
+			Math.min(targetTop, workspace.scrollHeight - workspace.clientHeight),
+		)
+	}
 
 	async function openProjectPicker() {
 		setIsModalOpen(true)
@@ -729,8 +921,8 @@ function App() {
 		dragStateRef.current = {
 			windowID,
 			pointerID: event.pointerId,
-			grabOffsetX: pointerCanvasX - moving.x,
-			grabOffsetY: pointerCanvasY - moving.y,
+			grabOffsetX: pointerCanvasX - moving.x - PAN_MARGIN,
+			grabOffsetY: pointerCanvasY - moving.y - PAN_MARGIN,
 			lastClientX: event.clientX,
 			lastClientY: event.clientY,
 			autoScrollFrame: null,
@@ -754,8 +946,8 @@ function App() {
 		const rect = workspace.getBoundingClientRect()
 		const pointerCanvasX = (drag.lastClientX - rect.left + workspace.scrollLeft) / zoomRef.current
 		const pointerCanvasY = (drag.lastClientY - rect.top + workspace.scrollTop) / zoomRef.current
-		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX)
-		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY)
+		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX - PAN_MARGIN)
+		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY - PAN_MARGIN)
 		setOpenFiles((current) =>
 			current.map((fileWindow) =>
 				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
@@ -849,16 +1041,18 @@ function App() {
 		})
 	}
 
-	const canvasWidth =
-		openFiles.reduce(
-			(max, fileWindow) => Math.max(max, fileWindow.x + (fileWindow.width ?? DEFAULT_WINDOW_WIDTH)),
-			0,
-		) + CANVAS_PADDING
-	const canvasHeight =
-		openFiles.reduce(
-			(max, fileWindow) => Math.max(max, fileWindow.y + (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT)),
-			0,
-		) + CANVAS_PADDING
+	// Content extent (furthest window edges), then pad with PAN_MARGIN on every
+	// side: left/top via the per-window render offset, right/bottom via these sizes.
+	const contentWidth = openFiles.reduce(
+		(max, fileWindow) => Math.max(max, fileWindow.x + (fileWindow.width ?? DEFAULT_WINDOW_WIDTH)),
+		0,
+	)
+	const contentHeight = openFiles.reduce(
+		(max, fileWindow) => Math.max(max, fileWindow.y + (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT)),
+		0,
+	)
+	const canvasWidth = contentWidth + PAN_MARGIN * 2
+	const canvasHeight = contentHeight + PAN_MARGIN * 2
 
 	return (
 		<div className="app-shell">
@@ -971,7 +1165,7 @@ function App() {
 								style={{
 									width: (fileWindow.width ?? DEFAULT_WINDOW_WIDTH) + 'px',
 									height: (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) + 'px',
-									transform: `translate(${fileWindow.x}px, ${fileWindow.y}px)`,
+									transform: `translate(${fileWindow.x + PAN_MARGIN}px, ${fileWindow.y + PAN_MARGIN}px)`,
 									zIndex: fileWindow.zIndex,
 								}}
 								onPointerDown={() => focusFileWindow(fileWindow.id)}
@@ -1045,6 +1239,18 @@ function App() {
 					})}
 				</div>
 			</main>
+
+			{activeProject !== null ? (
+				<Minimap
+					canvasWidth={canvasWidth}
+					canvasHeight={canvasHeight}
+					zoom={zoom}
+					openFiles={openFiles}
+					activeWindowID={activeWindowID}
+					viewport={viewport}
+					onNavigate={centerViewOn}
+				/>
+			) : null}
 
 			{isModalOpen ? (
 				<div className="modal-layer" role="presentation">
