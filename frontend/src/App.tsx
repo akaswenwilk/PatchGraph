@@ -1,8 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
 import { CodeView } from './CodeView'
+import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
+
+// LSP analysis is optional: 'unsupported' means the file's language has no
+// configured language server, so no bubbles are shown and it is not an error.
+type LspState = 'idle' | 'loading' | 'ready' | 'unsupported' | 'error'
 
 type ProjectSummary = {
 	id: string
@@ -23,6 +28,11 @@ type OpenFile = {
 	state: LoadState
 	error: string
 	lines: string[]
+	lspState: LspState
+	symbols: LspSymbol[]
+	// Zero-based line to scroll to and highlight when the window opens (set when
+	// the window was opened by clicking an LSP location).
+	focusLine: number | null
 	width: number | null
 	height: number | null
 	x: number
@@ -701,7 +711,7 @@ function App() {
 		}
 	}
 
-	function createWindow(filename: string) {
+	function createWindow(filename: string, anchor?: OpenFile | null) {
 		const topWindow = openFiles.reduce<OpenFile | null>(
 			(currentTop, candidate) =>
 				currentTop === null || candidate.zIndex > currentTop.zIndex ? candidate : currentTop,
@@ -712,11 +722,20 @@ function App() {
 		const width = Math.min(DEFAULT_WINDOW_WIDTH, maxWidth)
 		const height = Math.min(DEFAULT_WINDOW_HEIGHT, maxHeight)
 		// On the infinite canvas we only cascade from the previous top window; the
-		// canvas grows to fit, so positions are never clamped to the viewport.
-		const x =
-			topWindow === null ? WINDOW_BASE_X : Math.max(0, topWindow.x + WINDOW_OFFSET_X)
-		const y =
-			topWindow === null ? WINDOW_BASE_Y : Math.max(0, topWindow.y + WINDOW_OFFSET_Y)
+		// canvas grows to fit, so positions are never clamped to the viewport. When
+		// opened from a location, sit directly to the right of the source window.
+		let x: number
+		let y: number
+		if (anchor) {
+			x = Math.max(0, anchor.x + (anchor.width ?? DEFAULT_WINDOW_WIDTH) + WINDOW_OFFSET_X)
+			y = Math.max(0, anchor.y)
+		} else if (topWindow === null) {
+			x = WINDOW_BASE_X
+			y = WINDOW_BASE_Y
+		} else {
+			x = Math.max(0, topWindow.x + WINDOW_OFFSET_X)
+			y = Math.max(0, topWindow.y + WINDOW_OFFSET_Y)
+		}
 
 		return {
 			id: String(nextWindowIDRef.current++),
@@ -724,6 +743,9 @@ function App() {
 			state: 'loading' as LoadState,
 			error: '',
 			lines: [],
+			lspState: 'loading' as LspState,
+			symbols: [],
+			focusLine: null,
 			width,
 			height,
 			x,
@@ -732,17 +754,9 @@ function App() {
 		}
 	}
 
-	async function handleFileOpen(filename: string) {
-		if (activeProject === null) {
-			return
-		}
-
-		const pendingWindow = createWindow(filename)
-		setOpenFiles((current) => [...current, pendingWindow])
-		setActiveWindowID(pendingWindow.id)
-
+	async function loadFileContents(projectID: string, filename: string, windowID: string) {
 		try {
-			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/files`, {
+			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/files`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -760,20 +774,15 @@ function App() {
 
 			setOpenFiles((current) =>
 				current.map((fileWindow) =>
-					fileWindow.id === pendingWindow.id
-						? {
-								...fileWindow,
-								state: 'ready',
-								error: '',
-								lines: data,
-							}
+					fileWindow.id === windowID
+						? { ...fileWindow, state: 'ready', error: '', lines: data }
 						: fileWindow,
 				),
 			)
 		} catch (error) {
 			setOpenFiles((current) =>
 				current.map((fileWindow) =>
-					fileWindow.id === pendingWindow.id
+					fileWindow.id === windowID
 						? {
 								...fileWindow,
 								state: 'error',
@@ -783,6 +792,76 @@ function App() {
 						: fileWindow,
 				),
 			)
+		}
+	}
+
+	function handleFileOpen(filename: string) {
+		if (activeProject === null) {
+			return
+		}
+
+		const pendingWindow = createWindow(filename)
+		setOpenFiles((current) => [...current, pendingWindow])
+		setActiveWindowID(pendingWindow.id)
+
+		// Contents and language-server info load in parallel; neither blocks the other.
+		void loadFileContents(activeProject.id, filename, pendingWindow.id)
+		void loadLspInfo(activeProject.id, filename, pendingWindow.id)
+	}
+
+	// Opens the file referenced by an LSP location in a new window beside the
+	// source window, scrolled to and highlighting the target line.
+	function openLocationInNewWindow(originWindowID: string, path: string, line: number) {
+		if (activeProject === null) {
+			return
+		}
+
+		const origin = openFiles.find((fileWindow) => fileWindow.id === originWindowID) ?? null
+		const pendingWindow = { ...createWindow(path, origin), focusLine: line }
+		setOpenFiles((current) => [...current, pendingWindow])
+		setActiveWindowID(pendingWindow.id)
+
+		void loadFileContents(activeProject.id, path, pendingWindow.id)
+		void loadLspInfo(activeProject.id, path, pendingWindow.id)
+	}
+
+	async function loadLspInfo(projectID: string, filename: string, windowID: string) {
+		const updateWindow = (changes: Partial<OpenFile>) => {
+			setOpenFiles((current) =>
+				current.map((fileWindow) =>
+					fileWindow.id === windowID ? { ...fileWindow, ...changes } : fileWindow,
+				),
+			)
+		}
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/lsp`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({ filename }),
+			})
+
+			// 400 = unsupported language (no server configured). Not an error.
+			if (response.status === 400) {
+				updateWindow({ lspState: 'unsupported', symbols: [] })
+				return
+			}
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			const analysis = parseLspAnalysis(data)
+			if (analysis === null) {
+				throw new Error('LSP response was invalid')
+			}
+
+			updateWindow({ lspState: 'ready', symbols: analysis.symbols })
+		} catch {
+			// Cross-references are an enhancement; on failure just show no bubbles.
+			updateWindow({ lspState: 'error', symbols: [] })
 		}
 	}
 
@@ -1197,7 +1276,10 @@ function App() {
 													<p className="workspace-eyebrow">{activeProject?.name ?? ''}</p>
 													<h2>{fileWindow.filename}</h2>
 												</div>
-												<p>{fileWindow.lines.length} lines</p>
+												<div className="file-window-meta">
+													<p>{fileWindow.lines.length} lines</p>
+													<LspStatusChip fileWindow={fileWindow} />
+												</div>
 											</div>
 
 											<button
@@ -1211,7 +1293,15 @@ function App() {
 										</header>
 
 										<div className="file-code-scroll">
-											<CodeView filename={fileWindow.filename} lines={fileWindow.lines} />
+											<CodeView
+												filename={fileWindow.filename}
+												lines={fileWindow.lines}
+												symbols={fileWindow.symbols}
+												focusLine={fileWindow.focusLine}
+												onOpenLocation={(path, line) =>
+													openLocationInNewWindow(fileWindow.id, path, line)
+												}
+											/>
 										</div>
 									</>
 								)}
@@ -1353,6 +1443,26 @@ function App() {
 			) : null}
 		</div>
 	)
+}
+
+function LspStatusChip({ fileWindow }: { fileWindow: OpenFile }) {
+	switch (fileWindow.lspState) {
+		case 'loading':
+			return <p className="file-window-lsp file-window-lsp-loading">LSP…</p>
+		case 'ready': {
+			const count = fileWindow.symbols.filter(hasLspInfo).length
+			return (
+				<p className="file-window-lsp file-window-lsp-ready">
+					LSP: {count} {count === 1 ? 'symbol' : 'symbols'}
+				</p>
+			)
+		}
+		case 'error':
+			return <p className="file-window-lsp file-window-lsp-error">LSP unavailable</p>
+		default:
+			// 'idle' and 'unsupported' show nothing.
+			return null
+	}
 }
 
 export default App

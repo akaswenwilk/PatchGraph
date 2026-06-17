@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -45,23 +44,9 @@ func Get(root, id string) (Detail, error) {
 }
 
 func ReadFileLines(root, projectID, filename string) ([]string, error) {
-	project, err := FindByID(root, projectID)
+	_, absPath, err := ResolveFile(root, projectID, filename)
 	if err != nil {
 		return nil, err
-	}
-
-	cleanFilename, err := normalizeRelativeFilePath(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	absPath := filepath.Join(project.AbsolutePath(), cleanFilename)
-	relPath, err := filepath.Rel(project.AbsolutePath(), absPath)
-	if err != nil {
-		return nil, err
-	}
-	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
-		return nil, ErrFileOutsideProject
 	}
 
 	file, err := os.Open(absPath)
@@ -73,13 +58,43 @@ func ReadFileLines(root, projectID, filename string) ([]string, error) {
 	return readLines(file)
 }
 
-func ListFiles(project Project) ([]string, error) {
-	if err := markSafeDirectory(project.AbsolutePath()); err != nil {
-		return nil, err
+// ResolveFile locates a project and returns the validated absolute path to a
+// file within it. The path is guaranteed not to escape the project root.
+func ResolveFile(root, projectID, filename string) (Project, string, error) {
+	project, err := FindByID(root, projectID)
+	if err != nil {
+		return Project{}, "", err
 	}
 
+	cleanFilename, err := normalizeRelativeFilePath(filename)
+	if err != nil {
+		return Project{}, "", err
+	}
+
+	absPath := filepath.Join(project.AbsolutePath(), cleanFilename)
+	relPath, err := filepath.Rel(project.AbsolutePath(), absPath)
+	if err != nil {
+		return Project{}, "", err
+	}
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		return Project{}, "", ErrFileOutsideProject
+	}
+
+	if _, err := os.Stat(absPath); err != nil {
+		return Project{}, "", err
+	}
+
+	return project, absPath, nil
+}
+
+func ListFiles(project Project) ([]string, error) {
+	// Mark the directory safe per-invocation with -c rather than mutating the
+	// global git config. The latter races on the global config lock when
+	// projects are listed concurrently ("could not lock config file").
 	command := exec.Command(
 		"git",
+		"-c",
+		"safe.directory="+project.AbsolutePath(),
 		"-C",
 		project.AbsolutePath(),
 		"ls-files",
@@ -111,16 +126,6 @@ func ListFiles(project Project) ([]string, error) {
 
 	slices.Sort(files)
 	return files, nil
-}
-
-func markSafeDirectory(path string) error {
-	command := exec.Command("git", "config", "--global", "--add", "safe.directory", path)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("mark safe directory: %w: %s", err, bytes.TrimSpace(output))
-	}
-
-	return nil
 }
 
 func normalizeRelativeFilePath(filename string) (string, error) {

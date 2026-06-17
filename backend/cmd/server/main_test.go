@@ -19,7 +19,7 @@ func TestProjectsEndpointReturnsProjects(t *testing.T) {
 			{ID: "alpha", Name: "PatchGraph", Path: "PatchGraph"},
 			{ID: "beta", Name: "PatchGraph", Path: "team/PatchGraph"},
 		}, nil
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -42,7 +42,7 @@ func TestProjectsEndpointReturnsProjects(t *testing.T) {
 func TestProjectsEndpointReturnsInternalServerError(t *testing.T) {
 	handler := newMux(func() ([]projects.Project, error) {
 		return nil, errors.New("boom")
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -57,7 +57,7 @@ func TestProjectsEndpointReturnsInternalServerError(t *testing.T) {
 func TestProjectsEndpointRejectsPost(t *testing.T) {
 	handler := newMux(func() ([]projects.Project, error) {
 		return []projects.Project{{ID: "alpha", Name: "PatchGraph", Path: "PatchGraph"}}, nil
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -87,6 +87,7 @@ func TestProjectEndpointReturnsDetail(t *testing.T) {
 			}, nil
 		},
 		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects/alpha", nil)
@@ -110,6 +111,7 @@ func TestProjectEndpointReturnsNotFound(t *testing.T) {
 		func(projectID string) (projects.Detail, error) {
 			return projects.Detail{}, fs.ErrNotExist
 		},
+		nil,
 		nil,
 	)
 
@@ -136,6 +138,7 @@ func TestProjectFileEndpointReturnsLines(t *testing.T) {
 			}
 			return []string{"line 1", "\tline 2"}, nil
 		},
+		nil,
 	)
 
 	body, err := json.Marshal(map[string]string{"filename": "frontend/src/App.tsx"})
@@ -164,6 +167,7 @@ func TestProjectFileEndpointReturnsProjectNotFound(t *testing.T) {
 		func(projectID string, filename string) ([]string, error) {
 			return nil, fs.ErrNotExist
 		},
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects/missing/files", strings.NewReader("{\"filename\":\"README.md\"}"))
@@ -182,6 +186,7 @@ func TestProjectFileEndpointRejectsInvalidBody(t *testing.T) {
 		func() ([]projects.Project, error) { return nil, nil },
 		nil,
 		func(projectID string, filename string) ([]string, error) { return nil, nil },
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects/alpha/files", strings.NewReader("{"))
@@ -199,6 +204,7 @@ func TestProjectFileEndpointRejectsGet(t *testing.T) {
 		func() ([]projects.Project, error) { return nil, nil },
 		nil,
 		func(projectID string, filename string) ([]string, error) { return nil, nil },
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects/alpha/files", nil)
