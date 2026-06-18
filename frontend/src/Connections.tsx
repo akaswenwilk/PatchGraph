@@ -1,93 +1,75 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 
-// A Miro-style connector created when a file window is opened from an LSP
-// location: it ties the source symbol's bubble dot to the opened window.
-export type Connection = {
-	id: string
-	// Identifies the source bubble dot (matches its data-bubble-* attributes).
-	sourceWindowID: string
-	sourceLine: number
-	sourceCharacter: number
-	// The window the line attaches to.
-	targetWindowID: string
-}
+import {
+	anchorPoint,
+	resolveConnection,
+	sourcePoint,
+	type Connection,
+	type ConnectionDraft,
+	type Segment,
+} from './connectionGeometry'
 
-function clamp(value: number, min: number, max: number): number {
-	return Math.max(min, Math.min(max, value))
-}
-
-// ConnectionsOverlay draws each connection as a line on a fixed, full-viewport
-// SVG portaled to <body>. Endpoints are recomputed every frame from live DOM
-// rects, so lines track windows as they are dragged, scrolled, or zoomed. A
-// connection is removed permanently once its source dot scrolls out of the
-// source window's code view (or either endpoint's element disappears).
+// ConnectionsOverlay draws committed connectors and the in-progress draft on a
+// fixed, full-viewport SVG portaled to <body>. Endpoints are recomputed every
+// frame from live DOM rects, so lines track windows during drag/scroll/zoom. A
+// connection is removed when an endpoint disappears or its dot scrolls out of
+// view. Connectors are selectable (a wide transparent hit line) for deletion.
 export function ConnectionsOverlay({
 	connections,
+	draft,
+	selectedID,
+	onSelect,
 	onRemove,
 }: {
 	connections: Connection[]
+	draft: ConnectionDraft | null
+	selectedID: string | null
+	onSelect: (id: string) => void
 	onRemove: (id: string) => void
 }) {
-	const lineRefs = useRef<Map<string, SVGLineElement>>(new Map())
+	const visibleRefs = useRef<Map<string, SVGLineElement>>(new Map())
+	const hitRefs = useRef<Map<string, SVGLineElement>>(new Map())
+	const draftRef = useRef<SVGLineElement | null>(null)
 	const onRemoveRef = useRef(onRemove)
 	useEffect(() => {
 		onRemoveRef.current = onRemove
 	})
 
 	useEffect(() => {
-		if (connections.length === 0) {
+		if (connections.length === 0 && draft === null) {
 			return
 		}
 
 		let frame = 0
+		const apply = (line: SVGLineElement | undefined | null, segment: Segment) => {
+			if (!line) {
+				return
+			}
+			line.setAttribute('x1', String(segment.sx))
+			line.setAttribute('y1', String(segment.sy))
+			line.setAttribute('x2', String(segment.tx))
+			line.setAttribute('y2', String(segment.ty))
+			line.style.visibility = 'visible'
+		}
+
 		const tick = () => {
 			for (const connection of connections) {
-				const line = lineRefs.current.get(connection.id)
-				if (!line) {
-					continue
-				}
-
-				const dot = document.querySelector(
-					`.lsp-bubble-dot[data-bubble-window="${connection.sourceWindowID}"]` +
-						`[data-bubble-line="${connection.sourceLine}"]` +
-						`[data-bubble-char="${connection.sourceCharacter}"]`,
-				)
-				const target = document.querySelector(`[data-window-id="${connection.targetWindowID}"]`)
-				if (!dot || !target) {
+				const segment = resolveConnection(connection)
+				if (!segment) {
 					onRemoveRef.current(connection.id)
 					continue
 				}
+				apply(visibleRefs.current.get(connection.id), segment)
+				apply(hitRefs.current.get(connection.id), segment)
+			}
 
-				const dotRect = dot.getBoundingClientRect()
-				const sourceX = dotRect.left + dotRect.width / 2
-				const sourceY = dotRect.top + dotRect.height / 2
-
-				// Disappear permanently once the dot leaves its window's code viewport.
-				const scroller = dot.closest('.file-window')?.querySelector('.file-code-scroll')
-				if (scroller) {
-					const view = scroller.getBoundingClientRect()
-					if (
-						sourceY < view.top ||
-						sourceY > view.bottom ||
-						sourceX < view.left ||
-						sourceX > view.right
-					) {
-						onRemoveRef.current(connection.id)
-						continue
-					}
+			if (draft) {
+				const source = sourcePoint(draft.source)
+				if (source) {
+					const end = draft.snap ? (anchorPoint(draft.snap, source) ?? draft.pointer) : draft.pointer
+					apply(draftRef.current, { sx: source.x, sy: source.y, tx: end.x, ty: end.y })
 				}
-
-				// Attach to the point on the target window's border nearest the dot.
-				const targetRect = target.getBoundingClientRect()
-				const targetX = clamp(sourceX, targetRect.left, targetRect.right)
-				const targetY = clamp(sourceY, targetRect.top, targetRect.bottom)
-
-				line.setAttribute('x1', String(sourceX))
-				line.setAttribute('y1', String(sourceY))
-				line.setAttribute('x2', String(targetX))
-				line.setAttribute('y2', String(targetY))
-				line.style.visibility = 'visible'
 			}
 
 			frame = requestAnimationFrame(tick)
@@ -95,24 +77,45 @@ export function ConnectionsOverlay({
 
 		frame = requestAnimationFrame(tick)
 		return () => cancelAnimationFrame(frame)
-	}, [connections])
+	}, [connections, draft])
 
 	return createPortal(
 		<svg className="connections-overlay" aria-hidden="true">
-			{connections.map((connection) => (
+			{connections.map((connection) => {
+				const selected = connection.id === selectedID
+				return (
+					<g key={connection.id}>
+						<line
+							ref={(element) => {
+								if (element) visibleRefs.current.set(connection.id, element)
+								else visibleRefs.current.delete(connection.id)
+							}}
+							className={selected ? 'connection-line connection-line-selected' : 'connection-line'}
+							style={{ visibility: 'hidden' }}
+						/>
+						<line
+							ref={(element) => {
+								if (element) hitRefs.current.set(connection.id, element)
+								else hitRefs.current.delete(connection.id)
+							}}
+							className="connection-hit-line"
+							style={{ visibility: 'hidden' }}
+							onPointerDown={(event) => event.stopPropagation()}
+							onClick={(event) => {
+								event.stopPropagation()
+								onSelect(connection.id)
+							}}
+						/>
+					</g>
+				)
+			})}
+			{draft ? (
 				<line
-					key={connection.id}
-					ref={(element) => {
-						if (element) {
-							lineRefs.current.set(connection.id, element)
-						} else {
-							lineRefs.current.delete(connection.id)
-						}
-					}}
-					className="connection-line"
+					ref={draftRef}
+					className="connection-line connection-line-draft"
 					style={{ visibility: 'hidden' }}
 				/>
-			))}
+			) : null}
 		</svg>,
 		document.body,
 	)

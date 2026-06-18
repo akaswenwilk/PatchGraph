@@ -14,6 +14,10 @@ import {
 	type LspLocation,
 	type LspSymbol,
 } from './lsp'
+import type { DotAnchor } from './connectionGeometry'
+
+// Begin dragging a new connector from a bubble dot.
+type StartConnection = (source: DotAnchor, clientX: number, clientY: number) => void
 
 // Handler used by location items: open the file at a line.
 type OpenLocation = (path: string, line: number) => void
@@ -43,6 +47,7 @@ type CodeViewProps = {
 	openBubble: string | null
 	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocationFromSymbol
+	onStartConnection?: StartConnection
 }
 
 type HighlightResult = {
@@ -66,6 +71,7 @@ export function CodeView({
 	openBubble,
 	onBubbleChange,
 	onOpenLocation,
+	onStartConnection,
 }: CodeViewProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null)
 	const focusedRowRef = useRef<HTMLDivElement | null>(null)
@@ -137,6 +143,7 @@ export function CodeView({
 									openBubble={openBubble}
 									onBubbleChange={onBubbleChange}
 									onOpenLocation={onOpenLocation}
+									onStartConnection={onStartConnection}
 								/>
 							))}
 						</span>
@@ -155,6 +162,7 @@ function CodeSegment({
 	openBubble,
 	onBubbleChange,
 	onOpenLocation,
+	onStartConnection,
 }: {
 	segment: LineSegment
 	file: string
@@ -163,6 +171,7 @@ function CodeSegment({
 	openBubble: string | null
 	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocationFromSymbol
+	onStartConnection?: StartConnection
 }) {
 	const style = segment.color ? { color: segment.color } : undefined
 	const tokenRef = useRef<HTMLSpanElement>(null)
@@ -197,10 +206,26 @@ function CodeSegment({
 				<span className="lsp-bubble">
 					<span
 						className="lsp-bubble-dot"
-						aria-hidden="true"
 						data-bubble-window={windowID}
 						data-bubble-line={line}
 						data-bubble-char={segment.markStart ?? -1}
+						title="Drag to connect"
+						onPointerDown={(event) => {
+							// Start drawing a connector; don't toggle the popover or focus.
+							event.stopPropagation()
+							event.preventDefault()
+							onStartConnection?.(
+								{
+									kind: 'dot',
+									windowID,
+									line,
+									character: segment.markStart ?? -1,
+								},
+								event.clientX,
+								event.clientY,
+							)
+						}}
+						onClick={(event) => event.stopPropagation()}
 					/>
 					{open ? (
 						<LspPopover
