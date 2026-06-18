@@ -11,6 +11,8 @@ export type LspSymbol = {
 	definitions: LspLocation[]
 	references: LspLocation[]
 	implementations: LspLocation[]
+	// Every place this symbol appears within the analyzed file (to mark each).
+	occurrences: LspRange[]
 }
 export type LspAnalysis = {
 	file: string
@@ -42,12 +44,27 @@ function isLocation(value: unknown): value is LspLocation {
 	)
 }
 
+function isRange(value: unknown): value is LspRange {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+	const candidate = value as Record<string, unknown>
+	return isPosition(candidate.start) && isPosition(candidate.end)
+}
+
 function isLocationArray(value: unknown): value is LspLocation[] {
 	// The backend uses JSON null for empty location sets.
 	if (value === null) {
 		return true
 	}
 	return Array.isArray(value) && value.every(isLocation)
+}
+
+function isRangeArray(value: unknown): value is LspRange[] {
+	if (value === null) {
+		return true
+	}
+	return Array.isArray(value) && value.every(isRange)
 }
 
 function isSymbol(value: unknown): value is LspSymbol {
@@ -61,18 +78,20 @@ function isSymbol(value: unknown): value is LspSymbol {
 		isPosition(candidate.position) &&
 		isLocationArray(candidate.definitions) &&
 		isLocationArray(candidate.references) &&
-		isLocationArray(candidate.implementations)
+		isLocationArray(candidate.implementations) &&
+		isRangeArray(candidate.occurrences)
 	)
 }
 
-// normalizeSymbol coerces null location sets to empty arrays so the rest of the
-// UI can treat them uniformly.
+// normalizeSymbol coerces null location/occurrence sets to empty arrays so the
+// rest of the UI can treat them uniformly.
 function normalizeSymbol(symbol: LspSymbol): LspSymbol {
 	return {
 		...symbol,
 		definitions: symbol.definitions ?? [],
 		references: symbol.references ?? [],
 		implementations: symbol.implementations ?? [],
+		occurrences: symbol.occurrences ?? [],
 	}
 }
 
@@ -109,6 +128,43 @@ export function lspInfoCount(symbol: LspSymbol): number {
 	return symbol.definitions.length + symbol.references.length + symbol.implementations.length
 }
 
+// locationAt reports whether a location sits exactly at the given position.
+function locationAt(location: LspLocation, file: string, line: number, character: number): boolean {
+	return (
+		location.path === file &&
+		location.range.start.line === line &&
+		location.range.start.character === character
+	)
+}
+
+// referencesExcludingSelf is the symbol's references with the occurrence
+// currently being viewed removed (the location of the bubble you opened), since
+// "a reference to the thing I'm looking at" is just itself.
+export function referencesExcludingSelf(
+	symbol: LspSymbol,
+	file: string,
+	line: number,
+	character: number,
+): LspLocation[] {
+	return symbol.references.filter((reference) => !locationAt(reference, file, line, character))
+}
+
+// occurrenceHasNavigation reports whether an occurrence leads anywhere other
+// than itself: a definition, an implementation, or some other reference. Used
+// so occurrences with nothing to navigate to (e.g. a stdlib symbol used once,
+// whose external definition was filtered out) don't get a useless bubble.
+function occurrenceHasNavigation(
+	symbol: LspSymbol,
+	file: string,
+	line: number,
+	character: number,
+): boolean {
+	if (symbol.definitions.length > 0 || symbol.implementations.length > 0) {
+		return true
+	}
+	return referencesExcludingSelf(symbol, file, line, character).length > 0
+}
+
 // A range within a single rendered line that should be marked as having LSP
 // information, plus the symbol it belongs to.
 export type SymbolMark = { start: number; end: number; symbol: LspSymbol }
@@ -127,30 +183,50 @@ export function symbolWordEnd(line: string, start: number): number {
 	return end > start ? end : Math.min(start + 1, line.length)
 }
 
-// buildLineMarks groups marks by line index for symbols that actually have
-// cross-reference information.
-export function buildLineMarks(lines: string[], symbols: LspSymbol[]): Map<number, SymbolMark[]> {
+// buildLineMarks groups marks by line index. The backend reports every
+// occurrence of each symbol within the analyzed file (including usages and
+// symbols declared in other files), so we mark each occurrence range directly —
+// skipping occurrences that have nowhere to navigate to. `currentFile` is the
+// open file's project-relative path, matching the `path` on in-file locations.
+export function buildLineMarks(
+	lines: string[],
+	symbols: LspSymbol[],
+	currentFile: string,
+): Map<number, SymbolMark[]> {
 	const byLine = new Map<number, SymbolMark[]>()
 
-	for (const symbol of symbols) {
-		if (!hasLspInfo(symbol)) {
-			continue
-		}
-
-		const lineIndex = symbol.position.line
+	const addMark = (lineIndex: number, startChar: number, endChar: number, symbol: LspSymbol) => {
 		const line = lines[lineIndex]
 		if (line === undefined) {
-			continue
+			return
 		}
 
-		const start = Math.max(0, Math.min(symbol.position.character, line.length))
-		const end = symbolWordEnd(line, start)
+		const start = Math.max(0, Math.min(startChar, line.length))
+		// Trust the reported end when sane, else expand across the identifier.
+		const end = endChar > start ? Math.min(endChar, line.length) : symbolWordEnd(line, start)
 		const marks = byLine.get(lineIndex) ?? []
-		// Skip a second symbol reported at the same start (e.g. overlapping
-		// declarations) so we never render stacked bubbles on one word.
+		// Skip a second mark at the same start so words never get stacked bubbles.
 		if (!marks.some((mark) => mark.start === start)) {
 			marks.push({ start, end, symbol })
 			byLine.set(lineIndex, marks)
+		}
+	}
+
+	const occurrencesOf = (symbol: LspSymbol) =>
+		symbol.occurrences.length > 0
+			? symbol.occurrences.map((range) => ({
+					line: range.start.line,
+					startChar: range.start.character,
+					endChar: range.end.character,
+				}))
+			: [{ line: symbol.position.line, startChar: symbol.position.character, endChar: -1 }]
+
+	for (const symbol of symbols) {
+		for (const occurrence of occurrencesOf(symbol)) {
+			if (!occurrenceHasNavigation(symbol, currentFile, occurrence.line, occurrence.startChar)) {
+				continue
+			}
+			addMark(occurrence.line, occurrence.startChar, occurrence.endChar, symbol)
 		}
 	}
 
@@ -167,6 +243,9 @@ export type LineSegment = {
 	// True only for the segment that contains the mark's first character, so the
 	// bubble/popover is rendered once even when a word spans multiple tokens.
 	bubbleAnchor?: boolean
+	// Start character of the mark, set on the anchor segment so the popover can
+	// identify which occurrence it belongs to.
+	markStart?: number
 }
 
 // splitTokensWithMarks slices syntax-highlight tokens at mark boundaries so the
@@ -206,6 +285,7 @@ export function splitTokensWithMarks(
 				color: token.color,
 				symbol: mark.symbol,
 				bubbleAnchor: markStart === mark.start,
+				markStart: markStart === mark.start ? mark.start : undefined,
 			})
 			cursor = markEnd
 		}

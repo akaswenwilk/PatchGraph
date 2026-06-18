@@ -190,12 +190,14 @@ func TestAnalyzeWithGopls(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "go.mod"), "module example.com/sample\n\ngo 1.24\n")
 	source := `package sample
 
+import "fmt"
+
 // Greeter greets.
 type Greeter struct{}
 
 // Greet returns a greeting.
 func (g Greeter) Greet() string {
-	return "hi"
+	return fmt.Sprintf("hi")
 }
 
 func Use() string {
@@ -221,23 +223,56 @@ func Use() string {
 		t.Fatal("expected at least one symbol")
 	}
 
-	// gopls names the method "(Greeter).Greet"; match on the Greet method
-	// regardless of the exact qualified form.
-	var greet *SymbolInfo
-	for i := range analysis.Symbols {
-		if strings.Contains(analysis.Symbols[i].Name, "Greet") && analysis.Symbols[i].Kind == "Method" {
-			greet = &analysis.Symbols[i]
-			break
-		}
-	}
+	greet := findSymbol(analysis.Symbols, func(s SymbolInfo) bool {
+		return s.Name == "Greet" && s.Kind == "Method"
+	})
 	if greet == nil {
 		t.Fatalf("Greet method not found in %v", symbolNames(analysis.Symbols))
 	}
-	// Greet is called from Use(), so it should have at least its declaration
-	// plus the call site among references.
+	// Greet is called from Use(), so it is marked at its declaration and the
+	// call site: at least two occurrences in this file.
+	if len(greet.Occurrences) < 2 {
+		t.Errorf("Greet occurrences = %d, want >= 2", len(greet.Occurrences))
+	}
 	if len(greet.References) < 2 {
 		t.Errorf("Greet references = %d, want >= 2", len(greet.References))
 	}
+
+	// Out-of-repo locations are filtered out: every reported location is a
+	// project-relative path, never an absolute one (stdlib/dependencies).
+	for _, sym := range analysis.Symbols {
+		for _, group := range [][]Location{sym.Definitions, sym.References, sym.Implementations} {
+			for _, loc := range group {
+				if filepath.IsAbs(loc.Path) {
+					t.Errorf("symbol %q has out-of-repo location %q", sym.Name, loc.Path)
+				}
+			}
+		}
+	}
+
+	// Sprintf is from the standard library: it is still resolved (so its in-repo
+	// call site is marked), but its external definition has been filtered out.
+	sprintf := findSymbol(analysis.Symbols, func(s SymbolInfo) bool {
+		return s.Name == "Sprintf"
+	})
+	if sprintf == nil {
+		t.Fatalf("Sprintf not found in %v", symbolNames(analysis.Symbols))
+	}
+	if len(sprintf.Definitions) != 0 {
+		t.Errorf("Sprintf definitions = %d, want 0 (external definition filtered)", len(sprintf.Definitions))
+	}
+	if len(sprintf.References) == 0 {
+		t.Error("Sprintf should keep its in-repo call-site reference")
+	}
+}
+
+func findSymbol(symbols []SymbolInfo, match func(SymbolInfo) bool) *SymbolInfo {
+	for i := range symbols {
+		if match(symbols[i]) {
+			return &symbols[i]
+		}
+	}
+	return nil
 }
 
 func writeTestFile(t *testing.T, path, content string) {

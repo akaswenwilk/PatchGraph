@@ -26,17 +26,19 @@ test('opening a Go file marks symbols with language-server bubbles', async ({ pa
 		timeout: LSP_TIMEOUT,
 	})
 
-	// At least one symbol (e.g. the Greeter type / Greet method) is marked.
+	// Symbols are marked at every in-file occurrence, not just declarations:
+	// lib.go declares Greeter/Greet/Use and also uses Greeter and Greet inside
+	// Use(), so there are more bubbles than the three declarations.
 	const bubbles = viewer.locator('.lsp-bubble-dot')
 	await expect(bubbles.first()).toBeVisible({ timeout: LSP_TIMEOUT })
-	expect(await bubbles.count()).toBeGreaterThan(0)
+	expect(await bubbles.count()).toBeGreaterThanOrEqual(4)
 
 	// Clicking a marked word reveals the cross-reference popover.
 	const markedWord = viewer.locator('.lsp-token').first()
 	await markedWord.click()
 	const popover = viewer.locator('.lsp-popover').first()
 	await expect(popover).toBeVisible()
-	await expect(popover).toContainText('References')
+	await expect(popover).toContainText('Definitions')
 
 	// The popover stays open until explicitly closed via its × button.
 	await viewer.getByRole('heading', { name: 'lib.go' }).hover()
