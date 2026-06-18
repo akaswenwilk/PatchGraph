@@ -975,7 +975,9 @@ function App() {
 
 		const rect = fileWindow.getBoundingClientRect()
 		const minWidth = 320
-		const minHeight = 280
+		// Low enough to shrink the code area down to roughly a single visible line
+		// (the header is ~85px; this leaves room for about one row beneath it).
+		const minHeight = 140
 		// The canvas is scrollable, so windows may grow well past the viewport.
 		const maxWidth = 4000
 		const maxHeight = 4000
