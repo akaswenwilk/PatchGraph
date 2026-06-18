@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import {
 	highlightToLines,
@@ -26,6 +27,12 @@ type CodeViewProps = {
 	symbols?: LspSymbol[]
 	// Zero-based line to scroll to and highlight once content is rendered.
 	focusLine?: number | null
+	// Identifies this window so bubble ids are unique across multiple windows.
+	windowID: string
+	// The single open bubble id across the whole app (or null), so opening one
+	// closes any other.
+	openBubble: string | null
+	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocation
 }
 
@@ -40,8 +47,17 @@ type HighlightResult = {
 // applied asynchronously via Shiki; until (or unless) it resolves, lines render
 // as plain text so content is never blocked on the highlighter. Words that the
 // language server reported information for are marked with an LSP bubble; click
-// the word to open a popover of clickable locations.
-export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }: CodeViewProps) {
+// the word to open a popover of clickable locations (only one open at a time).
+export function CodeView({
+	filename,
+	lines,
+	symbols,
+	focusLine,
+	windowID,
+	openBubble,
+	onBubbleChange,
+	onOpenLocation,
+}: CodeViewProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null)
 	const focusedRowRef = useRef<HTMLDivElement | null>(null)
 
@@ -67,12 +83,13 @@ export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }
 		}
 	}, [filename, lines])
 
-	// Scroll the focused line into view once the content (and thus the row) exists.
+	// Scroll the focused line to the top of the window once the content (and thus
+	// the row) exists, so the clicked location lands at the top, not the middle.
 	useEffect(() => {
 		if (focusLine == null) {
 			return
 		}
-		focusedRowRef.current?.scrollIntoView({ block: 'center' })
+		focusedRowRef.current?.scrollIntoView({ block: 'start' })
 	}, [focusLine, lines])
 
 	// Only use tokens that match the lines currently being rendered.
@@ -107,6 +124,9 @@ export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }
 									segment={segment}
 									file={filename}
 									line={index}
+									windowID={windowID}
+									openBubble={openBubble}
+									onBubbleChange={onBubbleChange}
 									onOpenLocation={onOpenLocation}
 								/>
 							))}
@@ -122,47 +142,44 @@ function CodeSegment({
 	segment,
 	file,
 	line,
+	windowID,
+	openBubble,
+	onBubbleChange,
 	onOpenLocation,
 }: {
 	segment: LineSegment
 	file: string
 	line: number
+	windowID: string
+	openBubble: string | null
+	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocation
 }) {
-	const [open, setOpen] = useState(false)
 	const style = segment.color ? { color: segment.color } : undefined
-
-	// Close on Escape while the popover is open.
-	useEffect(() => {
-		if (!open) {
-			return
-		}
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape') {
-				setOpen(false)
-			}
-		}
-		document.addEventListener('keydown', handleKeyDown)
-		return () => document.removeEventListener('keydown', handleKeyDown)
-	}, [open])
+	const tokenRef = useRef<HTMLSpanElement>(null)
 
 	if (!segment.symbol) {
 		return <span style={style}>{segment.content}</span>
 	}
 
+	const bubbleID = `${windowID}:${line}:${segment.markStart ?? -1}`
+	const open = openBubble === bubbleID
+	const toggle = () => onBubbleChange(open ? null : bubbleID)
+
 	return (
 		<span
+			ref={tokenRef}
 			className={open ? 'lsp-token lsp-token-open' : 'lsp-token'}
 			style={style}
 			role="button"
 			tabIndex={0}
 			aria-expanded={open}
 			aria-label={`Language server info for ${segment.symbol.name}`}
-			onClick={() => setOpen((value) => !value)}
+			onClick={toggle}
 			onKeyDown={(event) => {
 				if (event.key === 'Enter' || event.key === ' ') {
 					event.preventDefault()
-					setOpen((value) => !value)
+					toggle()
 				}
 			}}
 		>
@@ -174,7 +191,8 @@ function CodeSegment({
 						<LspPopover
 							symbol={segment.symbol}
 							current={{ file, line, character: segment.markStart ?? -1 }}
-							onClose={() => setOpen(false)}
+							anchorRef={tokenRef}
+							onClose={() => onBubbleChange(null)}
 							onOpenLocation={onOpenLocation}
 						/>
 					) : null}
@@ -184,14 +202,19 @@ function CodeSegment({
 	)
 }
 
+const POPOVER_GAP = 8
+const VIEWPORT_PADDING = 8
+
 function LspPopover({
 	symbol,
 	current,
+	anchorRef,
 	onClose,
 	onOpenLocation,
 }: {
 	symbol: LspSymbol
 	current: CurrentOccurrence
+	anchorRef: React.RefObject<HTMLElement | null>
 	onClose: () => void
 	onOpenLocation?: OpenLocation
 }) {
@@ -200,12 +223,75 @@ function LspPopover({
 	const references = referencesExcludingSelf(symbol, current.file, current.line, current.character)
 	const total = symbol.definitions.length + references.length + symbol.implementations.length
 
-	return (
+	// Opening a location closes this popover as it opens the new window.
+	const openLocation: OpenLocation | undefined = onOpenLocation
+		? (path, line) => {
+				onClose()
+				onOpenLocation(path, line)
+			}
+		: undefined
+
+	// Position the (portaled, fixed) popover from the anchor word's screen rect:
+	// below it by default, flipped above when there isn't room, clamped to the
+	// viewport. Recomputed while open as the window scrolls/zooms or resizes.
+	const popoverRef = useRef<HTMLSpanElement>(null)
+	const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
+
+	useLayoutEffect(() => {
+		const reposition = () => {
+			const anchor = anchorRef.current
+			const popover = popoverRef.current
+			if (!anchor || !popover) {
+				return
+			}
+
+			const anchorRect = anchor.getBoundingClientRect()
+			const { width, height } = popover.getBoundingClientRect()
+			const viewportWidth = window.innerWidth
+			const viewportHeight = window.innerHeight
+
+			let top = anchorRect.bottom + POPOVER_GAP
+			const flippedTop = anchorRect.top - POPOVER_GAP - height
+			// Flip above only if it doesn't fit below but does fit above.
+			if (top + height > viewportHeight - VIEWPORT_PADDING && flippedTop >= VIEWPORT_PADDING) {
+				top = flippedTop
+			}
+			top = Math.max(
+				VIEWPORT_PADDING,
+				Math.min(top, viewportHeight - height - VIEWPORT_PADDING),
+			)
+
+			const left = Math.max(
+				VIEWPORT_PADDING,
+				Math.min(anchorRect.left, viewportWidth - width - VIEWPORT_PADDING),
+			)
+
+			setPosition({ top, left })
+		}
+
+		reposition()
+		// Capture phase so scrolling of inner containers (the code area, the
+		// canvas) is observed, not just the window.
+		window.addEventListener('scroll', reposition, true)
+		window.addEventListener('resize', reposition)
+		return () => {
+			window.removeEventListener('scroll', reposition, true)
+			window.removeEventListener('resize', reposition)
+		}
+	}, [anchorRef, symbol, references.length])
+
+	return createPortal(
 		// Stop clicks inside the popover from toggling the token open state.
 		<span
+			ref={popoverRef}
 			className="lsp-popover"
 			role="dialog"
 			aria-label={`Language server info for ${symbol.name}`}
+			style={{
+				top: position?.top ?? 0,
+				left: position?.left ?? 0,
+				visibility: position ? 'visible' : 'hidden',
+			}}
 			onClick={(event) => event.stopPropagation()}
 		>
 			<span className="lsp-popover-header">
@@ -225,20 +311,21 @@ function LspPopover({
 			<LspLocationGroup
 				label="Definitions"
 				locations={symbol.definitions}
-				onOpenLocation={onOpenLocation}
+				onOpenLocation={openLocation}
 			/>
 			<LspLocationGroup
 				label="References"
 				locations={references}
-				onOpenLocation={onOpenLocation}
+				onOpenLocation={openLocation}
 			/>
 			<LspLocationGroup
 				label="Implementations"
 				locations={symbol.implementations}
-				onOpenLocation={onOpenLocation}
+				onOpenLocation={openLocation}
 			/>
 			{total === 0 ? <span className="lsp-popover-empty">No cross-references</span> : null}
-		</span>
+		</span>,
+		document.body,
 	)
 }
 

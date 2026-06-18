@@ -432,6 +432,9 @@ function App() {
 	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
 	const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
 	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
+	// Id of the single LSP popover currently open across all windows, so opening
+	// one bubble closes any other. null when none is open.
+	const [openBubble, setOpenBubble] = useState<string | null>(null)
 	const [zoom, setZoom] = useState(1)
 	const [isHelpOpen, setIsHelpOpen] = useState(false)
 	// Live viewport (scroll offset + visible size) of the scroll container, kept in
@@ -447,6 +450,10 @@ function App() {
 	// Scroll offset to apply after a zoom change so the canvas point under the
 	// cursor stays put (zoom-to-cursor). Consumed in a layout effect.
 	const pendingScrollRef = useRef<{ left: number; top: number } | null>(null)
+	// Per-window code-scroller top positions (as a fraction of scroll height)
+	// captured before a zoom change and restored after, so the visible top line
+	// of each open file stays put while zooming. Consumed in a layout effect.
+	const codeScrollRestoreRef = useRef<{ element: Element; fraction: number }[]>([])
 	const dragStateRef = useRef<{
 		windowID: string
 		pointerID: number
@@ -515,6 +522,22 @@ function App() {
 		}
 	}, [isHelpOpen])
 
+	// Close the open LSP popover on Escape.
+	useEffect(() => {
+		if (openBubble === null) {
+			return
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setOpenBubble(null)
+			}
+		}
+
+		window.addEventListener('keydown', handleKeyDown)
+		return () => window.removeEventListener('keydown', handleKeyDown)
+	}, [openBubble])
+
 	// Ctrl+wheel zooms the canvas. We attach natively with passive:false because
 	// React's synthetic wheel listener is passive — preventDefault there can't
 	// stop the browser's own page zoom.
@@ -549,6 +572,16 @@ function App() {
 				top: canvasY * nextZoom - offsetY,
 			}
 
+			// Capture each open file's vertical scroll as a fraction of its total
+			// height (scale-invariant), so we can restore the same top line after the
+			// zoom re-lays-out the (CSS zoom) scaled scroll containers.
+			codeScrollRestoreRef.current = Array.from(
+				workspace.querySelectorAll('.file-code-scroll'),
+			).map((element) => ({
+				element,
+				fraction: element.scrollHeight > 0 ? element.scrollTop / element.scrollHeight : 0,
+			}))
+
 			zoomRef.current = nextZoom
 			setZoom(nextZoom)
 		}
@@ -560,6 +593,13 @@ function App() {
 	// Apply the zoom-to-cursor scroll correction once the new scale has been laid
 	// out, before paint, to avoid a visible jump.
 	useLayoutEffect(() => {
+		// Restore each open file's top line: the same scroll fraction maps to the
+		// same top line at any scale, so zooming keeps the text view in place.
+		for (const { element, fraction } of codeScrollRestoreRef.current) {
+			element.scrollTop = fraction * element.scrollHeight
+		}
+		codeScrollRestoreRef.current = []
+
 		const workspace = workspaceRef.current
 		const pending = pendingScrollRef.current
 		if (workspace === null || pending === null) {
@@ -1025,8 +1065,12 @@ function App() {
 		const rect = workspace.getBoundingClientRect()
 		const pointerCanvasX = (drag.lastClientX - rect.left + workspace.scrollLeft) / zoomRef.current
 		const pointerCanvasY = (drag.lastClientY - rect.top + workspace.scrollTop) / zoomRef.current
-		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX - PAN_MARGIN)
-		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY - PAN_MARGIN)
+		// Allow dragging up/left into the surrounding pan margin (down to
+		// -PAN_MARGIN, where the window sits at the canvas edge), not just to the
+		// content origin. The lower bound keeps it within the scrollable canvas so
+		// the fixed render offset never needs to reflow mid-drag.
+		const nextX = Math.max(-PAN_MARGIN, pointerCanvasX - drag.grabOffsetX - PAN_MARGIN)
+		const nextY = Math.max(-PAN_MARGIN, pointerCanvasY - drag.grabOffsetY - PAN_MARGIN)
 		setOpenFiles((current) =>
 			current.map((fileWindow) =>
 				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
@@ -1298,6 +1342,9 @@ function App() {
 												lines={fileWindow.lines}
 												symbols={fileWindow.symbols}
 												focusLine={fileWindow.focusLine}
+												windowID={fileWindow.id}
+												openBubble={openBubble}
+												onBubbleChange={setOpenBubble}
 												onOpenLocation={(path, line) =>
 													openLocationInNewWindow(fileWindow.id, path, line)
 												}

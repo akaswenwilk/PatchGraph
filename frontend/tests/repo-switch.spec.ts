@@ -294,3 +294,45 @@ test('a previously-focused window can still be dragged after focusing another', 
 	const bodyCursor = await page.evaluate(() => document.body.style.cursor)
 	expect(bodyCursor).not.toBe('grabbing')
 })
+
+test('a window can be dragged up past the content origin into the top margin', async ({
+	page,
+}) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /base\.txt/ }).click()
+
+	const viewer = page.getByRole('region', { name: 'File viewer for base.txt' })
+	const header = viewer.locator('.file-window-header')
+	const workspace = page.locator('.workspace')
+	await expect(viewer).toBeVisible()
+
+	// Canvas-space Y (independent of scroll).
+	const translateY = () =>
+		viewer.evaluate(
+			(element) => new DOMMatrixReadOnly(window.getComputedStyle(element).transform).m42,
+		)
+	const before = await translateY()
+
+	// Scroll so the window sits ~320px below the viewport top, clear of the edge
+	// where dragging up would otherwise trigger auto-scroll.
+	await workspace.evaluate((element, target) => {
+		element.scrollTop = target
+	}, before - 320)
+
+	const box = await header.boundingBox()
+	if (box === null) {
+		throw new Error('Expected header bounding box')
+	}
+
+	await page.mouse.move(box.x + 12, box.y + 10)
+	await page.mouse.down()
+	await page.mouse.move(box.x + 12, box.y + 10 - 200, { steps: 12 })
+	await page.mouse.up()
+
+	// Previously the window clamped at the content origin after ~24px of travel;
+	// now it follows the pointer up into the surrounding pan margin.
+	const after = await translateY()
+	expect(before - after).toBeGreaterThan(100)
+})
