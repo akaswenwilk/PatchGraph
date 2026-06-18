@@ -83,12 +83,13 @@ export function CodeView({
 		}
 	}, [filename, lines])
 
-	// Scroll the focused line into view once the content (and thus the row) exists.
+	// Scroll the focused line to the top of the window once the content (and thus
+	// the row) exists, so the clicked location lands at the top, not the middle.
 	useEffect(() => {
 		if (focusLine == null) {
 			return
 		}
-		focusedRowRef.current?.scrollIntoView({ block: 'center' })
+		focusedRowRef.current?.scrollIntoView({ block: 'start' })
 	}, [focusLine, lines])
 
 	// Only use tokens that match the lines currently being rendered.
