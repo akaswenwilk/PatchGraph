@@ -213,6 +213,14 @@ function LspPopover({
 	const references = referencesExcludingSelf(symbol, current.file, current.line, current.character)
 	const total = symbol.definitions.length + references.length + symbol.implementations.length
 
+	// Opening a location closes this popover as it opens the new window.
+	const openLocation: OpenLocation | undefined = onOpenLocation
+		? (path, line) => {
+				onClose()
+				onOpenLocation(path, line)
+			}
+		: undefined
+
 	return (
 		// Stop clicks inside the popover from toggling the token open state.
 		<span
@@ -238,17 +246,17 @@ function LspPopover({
 			<LspLocationGroup
 				label="Definitions"
 				locations={symbol.definitions}
-				onOpenLocation={onOpenLocation}
+				onOpenLocation={openLocation}
 			/>
 			<LspLocationGroup
 				label="References"
 				locations={references}
-				onOpenLocation={onOpenLocation}
+				onOpenLocation={openLocation}
 			/>
 			<LspLocationGroup
 				label="Implementations"
 				locations={symbol.implementations}
-				onOpenLocation={onOpenLocation}
+				onOpenLocation={openLocation}
 			/>
 			{total === 0 ? <span className="lsp-popover-empty">No cross-references</span> : null}
 		</span>

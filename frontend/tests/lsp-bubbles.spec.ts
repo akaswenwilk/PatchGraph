@@ -88,6 +88,9 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 	// A second window for the same file opened, with the target line highlighted.
 	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
 	await expect(page.locator('.code-row-focused').first()).toBeVisible()
+
+	// Opening the location also closed the source popover.
+	await expect(page.locator('.lsp-popover')).toHaveCount(0)
 })
 
 test('opening a plain-text file shows no language-server bubbles', async ({ page }) => {
