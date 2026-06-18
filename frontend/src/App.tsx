@@ -450,6 +450,10 @@ function App() {
 	// Scroll offset to apply after a zoom change so the canvas point under the
 	// cursor stays put (zoom-to-cursor). Consumed in a layout effect.
 	const pendingScrollRef = useRef<{ left: number; top: number } | null>(null)
+	// Per-window code-scroller top positions (as a fraction of scroll height)
+	// captured before a zoom change and restored after, so the visible top line
+	// of each open file stays put while zooming. Consumed in a layout effect.
+	const codeScrollRestoreRef = useRef<{ element: Element; fraction: number }[]>([])
 	const dragStateRef = useRef<{
 		windowID: string
 		pointerID: number
@@ -568,6 +572,16 @@ function App() {
 				top: canvasY * nextZoom - offsetY,
 			}
 
+			// Capture each open file's vertical scroll as a fraction of its total
+			// height (scale-invariant), so we can restore the same top line after the
+			// zoom re-lays-out the (CSS zoom) scaled scroll containers.
+			codeScrollRestoreRef.current = Array.from(
+				workspace.querySelectorAll('.file-code-scroll'),
+			).map((element) => ({
+				element,
+				fraction: element.scrollHeight > 0 ? element.scrollTop / element.scrollHeight : 0,
+			}))
+
 			zoomRef.current = nextZoom
 			setZoom(nextZoom)
 		}
@@ -579,6 +593,13 @@ function App() {
 	// Apply the zoom-to-cursor scroll correction once the new scale has been laid
 	// out, before paint, to avoid a visible jump.
 	useLayoutEffect(() => {
+		// Restore each open file's top line: the same scroll fraction maps to the
+		// same top line at any scale, so zooming keeps the text view in place.
+		for (const { element, fraction } of codeScrollRestoreRef.current) {
+			element.scrollTop = fraction * element.scrollHeight
+		}
+		codeScrollRestoreRef.current = []
+
 		const workspace = workspaceRef.current
 		const pending = pendingScrollRef.current
 		if (workspace === null || pending === null) {
