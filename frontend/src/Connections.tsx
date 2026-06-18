@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useRef, type RefObject } from 'react'
 
 import {
 	anchorPoint,
@@ -10,24 +9,38 @@ import {
 	type Segment,
 } from './connectionGeometry'
 
-// ConnectionsOverlay draws committed connectors and the in-progress draft on a
-// fixed, full-viewport SVG portaled to <body>. Endpoints are recomputed every
-// frame from live DOM rects, so lines track windows during drag/scroll/zoom. A
-// connection is removed when an endpoint disappears or its dot scrolls out of
-// view. Connectors are selectable (a wide transparent hit line) for deletion.
+// ConnectionsOverlay draws committed connectors and the in-progress draft on an
+// SVG that lives *inside* the zoomed/scrolled canvas, sized to the canvas and
+// using canvas-logical coordinates. Because the lines are part of the same
+// scrolled+zoomed content as the windows, panning and zooming the canvas moves
+// lines and windows together natively (compositor), with no per-frame JS — so
+// they never lag behind. The rAF loop still recomputes endpoints every frame to
+// cover the cases that move a dot/window *relative* to the canvas: window drag,
+// resize, inner code-scroll, and the live draft. Geometry is computed in screen
+// (client) coordinates and converted to canvas-logical space here, dividing out
+// the current zoom. A connection is removed when an endpoint disappears or its
+// dot scrolls out of view. Connectors are selectable (a wide transparent hit
+// line) for deletion.
 export function ConnectionsOverlay({
 	connections,
 	draft,
 	selectedID,
 	onSelect,
 	onRemove,
+	width,
+	height,
+	zoomRef,
 }: {
 	connections: Connection[]
 	draft: ConnectionDraft | null
 	selectedID: string | null
 	onSelect: (id: string) => void
 	onRemove: (id: string) => void
+	width: number
+	height: number
+	zoomRef: RefObject<number>
 }) {
+	const svgRef = useRef<SVGSVGElement | null>(null)
 	const visibleRefs = useRef<Map<string, SVGLineElement>>(new Map())
 	const hitRefs = useRef<Map<string, SVGLineElement>>(new Map())
 	const draftRef = useRef<SVGLineElement | null>(null)
@@ -42,18 +55,29 @@ export function ConnectionsOverlay({
 		}
 
 		let frame = 0
-		const apply = (line: SVGLineElement | undefined | null, segment: Segment) => {
-			if (!line) {
+		const tick = () => {
+			const svg = svgRef.current
+			if (!svg) {
+				frame = requestAnimationFrame(tick)
 				return
 			}
-			line.setAttribute('x1', String(segment.sx))
-			line.setAttribute('y1', String(segment.sy))
-			line.setAttribute('x2', String(segment.tx))
-			line.setAttribute('y2', String(segment.ty))
-			line.style.visibility = 'visible'
-		}
+			// The SVG fills the canvas, so its on-screen rect is the canvas content
+			// origin (already scaled by zoom). Convert a client point into the SVG's
+			// own (unscaled, canvas-logical) coordinate space by removing that origin
+			// and dividing out the zoom.
+			const rect = svg.getBoundingClientRect()
+			const zoom = zoomRef.current || 1
+			const apply = (line: SVGLineElement | undefined | null, segment: Segment) => {
+				if (!line) {
+					return
+				}
+				line.setAttribute('x1', String((segment.sx - rect.left) / zoom))
+				line.setAttribute('y1', String((segment.sy - rect.top) / zoom))
+				line.setAttribute('x2', String((segment.tx - rect.left) / zoom))
+				line.setAttribute('y2', String((segment.ty - rect.top) / zoom))
+				line.style.visibility = 'visible'
+			}
 
-		const tick = () => {
 			for (const connection of connections) {
 				const segment = resolveConnection(connection)
 				if (!segment) {
@@ -77,10 +101,15 @@ export function ConnectionsOverlay({
 
 		frame = requestAnimationFrame(tick)
 		return () => cancelAnimationFrame(frame)
-	}, [connections, draft])
+	}, [connections, draft, zoomRef])
 
-	return createPortal(
-		<svg className="connections-overlay" aria-hidden="true">
+	return (
+		<svg
+			ref={svgRef}
+			className="connections-overlay"
+			width={width}
+			height={height}
+			aria-hidden="true">
 			{connections.map((connection) => {
 				const selected = connection.id === selectedID
 				return (
@@ -116,7 +145,6 @@ export function ConnectionsOverlay({
 					style={{ visibility: 'hidden' }}
 				/>
 			) : null}
-		</svg>,
-		document.body,
+		</svg>
 	)
 }

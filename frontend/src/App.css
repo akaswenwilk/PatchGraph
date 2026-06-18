@@ -619,13 +619,16 @@
 
 /* --- Connector lines (Miro-style) --- */
 
+/* Lives inside .workspace-canvas (sized to the canvas via width/height attrs)
+   so it scrolls and zooms together with the windows. A large z-index keeps
+   connectors drawn above every window (whose z-index values are small,
+   incrementing ints). */
 .connections-overlay {
-	position: fixed;
-	inset: 0;
-	width: 100vw;
-	height: 100vh;
+	position: absolute;
+	top: 0;
+	left: 0;
 	pointer-events: none;
-	z-index: 500;
+	z-index: 1000000;
 }
 
 .connection-line {

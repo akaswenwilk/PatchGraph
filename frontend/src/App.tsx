@@ -1482,16 +1482,19 @@ function App() {
 							</section>
 						)
 					})}
+
+					<ConnectionsOverlay
+						connections={connections}
+						draft={connectionDraft}
+						selectedID={selectedConnection}
+						onSelect={setSelectedConnection}
+						onRemove={removeConnection}
+						width={canvasWidth}
+						height={canvasHeight}
+						zoomRef={zoomRef}
+					/>
 				</div>
 			</main>
-
-			<ConnectionsOverlay
-				connections={connections}
-				draft={connectionDraft}
-				selectedID={selectedConnection}
-				onSelect={setSelectedConnection}
-				onRemove={removeConnection}
-			/>
 
 			{activeProject !== null ? (
 				<Minimap
