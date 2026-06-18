@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import {
 	highlightToLines,
@@ -154,6 +155,7 @@ function CodeSegment({
 	onOpenLocation?: OpenLocation
 }) {
 	const style = segment.color ? { color: segment.color } : undefined
+	const tokenRef = useRef<HTMLSpanElement>(null)
 
 	if (!segment.symbol) {
 		return <span style={style}>{segment.content}</span>
@@ -165,6 +167,7 @@ function CodeSegment({
 
 	return (
 		<span
+			ref={tokenRef}
 			className={open ? 'lsp-token lsp-token-open' : 'lsp-token'}
 			style={style}
 			role="button"
@@ -187,6 +190,7 @@ function CodeSegment({
 						<LspPopover
 							symbol={segment.symbol}
 							current={{ file, line, character: segment.markStart ?? -1 }}
+							anchorRef={tokenRef}
 							onClose={() => onBubbleChange(null)}
 							onOpenLocation={onOpenLocation}
 						/>
@@ -197,14 +201,19 @@ function CodeSegment({
 	)
 }
 
+const POPOVER_GAP = 8
+const VIEWPORT_PADDING = 8
+
 function LspPopover({
 	symbol,
 	current,
+	anchorRef,
 	onClose,
 	onOpenLocation,
 }: {
 	symbol: LspSymbol
 	current: CurrentOccurrence
+	anchorRef: React.RefObject<HTMLElement | null>
 	onClose: () => void
 	onOpenLocation?: OpenLocation
 }) {
@@ -221,12 +230,67 @@ function LspPopover({
 			}
 		: undefined
 
-	return (
+	// Position the (portaled, fixed) popover from the anchor word's screen rect:
+	// below it by default, flipped above when there isn't room, clamped to the
+	// viewport. Recomputed while open as the window scrolls/zooms or resizes.
+	const popoverRef = useRef<HTMLSpanElement>(null)
+	const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
+
+	useLayoutEffect(() => {
+		const reposition = () => {
+			const anchor = anchorRef.current
+			const popover = popoverRef.current
+			if (!anchor || !popover) {
+				return
+			}
+
+			const anchorRect = anchor.getBoundingClientRect()
+			const { width, height } = popover.getBoundingClientRect()
+			const viewportWidth = window.innerWidth
+			const viewportHeight = window.innerHeight
+
+			let top = anchorRect.bottom + POPOVER_GAP
+			const flippedTop = anchorRect.top - POPOVER_GAP - height
+			// Flip above only if it doesn't fit below but does fit above.
+			if (top + height > viewportHeight - VIEWPORT_PADDING && flippedTop >= VIEWPORT_PADDING) {
+				top = flippedTop
+			}
+			top = Math.max(
+				VIEWPORT_PADDING,
+				Math.min(top, viewportHeight - height - VIEWPORT_PADDING),
+			)
+
+			const left = Math.max(
+				VIEWPORT_PADDING,
+				Math.min(anchorRect.left, viewportWidth - width - VIEWPORT_PADDING),
+			)
+
+			setPosition({ top, left })
+		}
+
+		reposition()
+		// Capture phase so scrolling of inner containers (the code area, the
+		// canvas) is observed, not just the window.
+		window.addEventListener('scroll', reposition, true)
+		window.addEventListener('resize', reposition)
+		return () => {
+			window.removeEventListener('scroll', reposition, true)
+			window.removeEventListener('resize', reposition)
+		}
+	}, [anchorRef, symbol, references.length])
+
+	return createPortal(
 		// Stop clicks inside the popover from toggling the token open state.
 		<span
+			ref={popoverRef}
 			className="lsp-popover"
 			role="dialog"
 			aria-label={`Language server info for ${symbol.name}`}
+			style={{
+				top: position?.top ?? 0,
+				left: position?.left ?? 0,
+				visibility: position ? 'visible' : 'hidden',
+			}}
 			onClick={(event) => event.stopPropagation()}
 		>
 			<span className="lsp-popover-header">
@@ -259,7 +323,8 @@ function LspPopover({
 				onOpenLocation={openLocation}
 			/>
 			{total === 0 ? <span className="lsp-popover-empty">No cross-references</span> : null}
-		</span>
+		</span>,
+		document.body,
 	)
 }
 

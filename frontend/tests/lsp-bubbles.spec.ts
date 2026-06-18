@@ -33,12 +33,24 @@ test('opening a Go file marks symbols with language-server bubbles', async ({ pa
 	await expect(bubbles.first()).toBeVisible({ timeout: LSP_TIMEOUT })
 	expect(await bubbles.count()).toBeGreaterThanOrEqual(4)
 
-	// Clicking a marked word reveals the cross-reference popover.
+	// Clicking a marked word reveals the cross-reference popover (portaled to body).
 	const markedWord = viewer.locator('.lsp-token').first()
 	await markedWord.click()
-	const popover = viewer.locator('.lsp-popover').first()
+	const popover = page.locator('.lsp-popover').first()
 	await expect(popover).toBeVisible()
 	await expect(popover).toContainText('Definitions')
+
+	// It is portaled to <body> (overlaying the window, not clipped by its scroll)
+	// and positioned fully within the viewport.
+	await expect(page.locator('body > .lsp-popover')).toHaveCount(1)
+	const popBox = await popover.boundingBox()
+	const viewport = page.viewportSize()
+	if (popBox && viewport) {
+		expect(popBox.y).toBeGreaterThanOrEqual(-1)
+		expect(popBox.y + popBox.height).toBeLessThanOrEqual(viewport.height + 1)
+		expect(popBox.x).toBeGreaterThanOrEqual(-1)
+		expect(popBox.x + popBox.width).toBeLessThanOrEqual(viewport.width + 1)
+	}
 
 	// The popover stays open until explicitly closed via its × button.
 	await viewer.getByRole('heading', { name: 'lib.go' }).hover()
@@ -61,11 +73,11 @@ test('opening a second bubble closes the first (only one popover at a time)', as
 
 	// Open the first bubble's popover, then open a different bubble's.
 	await tokens.nth(0).click()
-	await expect(viewer.locator('.lsp-popover')).toHaveCount(1)
+	await expect(page.locator('.lsp-popover')).toHaveCount(1)
 
 	await tokens.nth(1).click()
 	// The first popover closed automatically; exactly one stays open.
-	await expect(viewer.locator('.lsp-popover')).toHaveCount(1)
+	await expect(page.locator('.lsp-popover')).toHaveCount(1)
 })
 
 test('clicking an LSP location opens that file at the line in a new window', async ({ page }) => {
@@ -81,7 +93,7 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 	// Open the popover for the first marked symbol and click its first location.
 	const token = sourceViewer.locator('.lsp-token').first()
 	await token.click()
-	const link = token.locator('.lsp-popover-location-link').first()
+	const link = page.locator('.lsp-popover-location-link').first()
 	await expect(link).toBeVisible()
 	await link.click()
 

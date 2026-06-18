@@ -610,10 +610,10 @@
 
 .lsp-popover {
 	display: flex;
-	position: absolute;
-	top: calc(100% + 8px);
-	left: 0;
-	z-index: 40;
+	/* Rendered in a portal on <body> and positioned from the anchor's screen
+	   rect, so it overlays the window instead of being clipped by its scroll. */
+	position: fixed;
+	z-index: 1000;
 	flex-direction: column;
 	gap: 8px;
 	min-width: 220px;
