@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
 import { CodeView } from './CodeView'
 import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
+import { ConnectionsOverlay, type Connection } from './Connections'
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -435,6 +436,8 @@ function App() {
 	// Id of the single LSP popover currently open across all windows, so opening
 	// one bubble closes any other. null when none is open.
 	const [openBubble, setOpenBubble] = useState<string | null>(null)
+	// Connector lines from a symbol's bubble dot to the window opened from it.
+	const [connections, setConnections] = useState<Connection[]>([])
 	const [zoom, setZoom] = useState(1)
 	const [isHelpOpen, setIsHelpOpen] = useState(false)
 	// Live viewport (scroll offset + visible size) of the scroll container, kept in
@@ -851,7 +854,12 @@ function App() {
 
 	// Opens the file referenced by an LSP location in a new window beside the
 	// source window, scrolled to and highlighting the target line.
-	function openLocationInNewWindow(originWindowID: string, path: string, line: number) {
+	function openLocationInNewWindow(
+		originWindowID: string,
+		path: string,
+		line: number,
+		source?: { line: number; character: number },
+	) {
 		if (activeProject === null) {
 			return
 		}
@@ -861,9 +869,26 @@ function App() {
 		setOpenFiles((current) => [...current, pendingWindow])
 		setActiveWindowID(pendingWindow.id)
 
+		// Draw a connector from the clicked symbol's bubble dot to the new window.
+		if (source) {
+			setConnections((current) => [
+				...current,
+				{
+					id: `${originWindowID}:${source.line}:${source.character}->${pendingWindow.id}`,
+					sourceWindowID: originWindowID,
+					sourceLine: source.line,
+					sourceCharacter: source.character,
+					targetWindowID: pendingWindow.id,
+				},
+			])
+		}
+
 		void loadFileContents(activeProject.id, path, pendingWindow.id)
 		void loadLspInfo(activeProject.id, path, pendingWindow.id)
 	}
+
+	const removeConnection = (id: string) =>
+		setConnections((current) => current.filter((connection) => connection.id !== id))
 
 	async function loadLspInfo(projectID: string, filename: string, windowID: string) {
 		const updateWindow = (changes: Partial<OpenFile>) => {
@@ -1284,6 +1309,7 @@ function App() {
 							<section
 								key={fileWindow.id}
 								className={isActive ? 'file-window file-window-active' : 'file-window'}
+								data-window-id={fileWindow.id}
 								aria-label={`File viewer for ${fileWindow.filename}`}
 								style={{
 									width: (fileWindow.width ?? DEFAULT_WINDOW_WIDTH) + 'px',
@@ -1345,8 +1371,8 @@ function App() {
 												windowID={fileWindow.id}
 												openBubble={openBubble}
 												onBubbleChange={setOpenBubble}
-												onOpenLocation={(path, line) =>
-													openLocationInNewWindow(fileWindow.id, path, line)
+												onOpenLocation={(path, line, source) =>
+													openLocationInNewWindow(fileWindow.id, path, line, source)
 												}
 											/>
 										</div>
@@ -1376,6 +1402,8 @@ function App() {
 					})}
 				</div>
 			</main>
+
+			<ConnectionsOverlay connections={connections} onRemove={removeConnection} />
 
 			{activeProject !== null ? (
 				<Minimap

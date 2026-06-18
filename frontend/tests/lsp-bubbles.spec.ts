@@ -105,6 +105,33 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 	await expect(page.locator('.lsp-popover')).toHaveCount(0)
 })
 
+test('opening a file from a location draws a connector that clears when the window closes', async ({
+	page,
+}) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /lib\.go/ }).click()
+
+	const viewers = page.getByRole('region', { name: 'File viewer for lib.go' })
+	await expect(viewers.first().locator('.file-window-lsp-ready')).toBeVisible({
+		timeout: LSP_TIMEOUT,
+	})
+
+	await viewers.first().locator('.lsp-token').first().click()
+	await page.locator('.lsp-popover-location-link').first().click()
+	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
+
+	// A connector line was drawn between the source dot and the new window.
+	const lines = page.locator('.connections-overlay .connection-line')
+	await expect(lines).toHaveCount(1)
+
+	// Closing the opened window removes its connector.
+	await viewers.nth(1).getByRole('button', { name: /^Close / }).click()
+	await expect(viewers).toHaveCount(1)
+	await expect(lines).toHaveCount(0)
+})
+
 test('opening a plain-text file shows no language-server bubbles', async ({ page }) => {
 	await page.goto('/')
 

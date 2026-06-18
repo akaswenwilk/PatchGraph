@@ -608,6 +608,23 @@
 	box-shadow: 0 0 0 2px rgba(13, 17, 23, 0.9);
 }
 
+/* --- Connector lines (Miro-style) --- */
+
+.connections-overlay {
+	position: fixed;
+	inset: 0;
+	width: 100vw;
+	height: 100vh;
+	pointer-events: none;
+	z-index: 500;
+}
+
+.connection-line {
+	stroke: rgba(124, 172, 255, 0.85);
+	stroke-width: 2;
+	stroke-linecap: round;
+}
+
 .lsp-popover {
 	display: flex;
 	/* Rendered in a portal on <body> and positioned from the anchor's screen
