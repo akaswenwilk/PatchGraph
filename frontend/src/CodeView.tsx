@@ -26,6 +26,12 @@ type CodeViewProps = {
 	symbols?: LspSymbol[]
 	// Zero-based line to scroll to and highlight once content is rendered.
 	focusLine?: number | null
+	// Identifies this window so bubble ids are unique across multiple windows.
+	windowID: string
+	// The single open bubble id across the whole app (or null), so opening one
+	// closes any other.
+	openBubble: string | null
+	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocation
 }
 
@@ -40,8 +46,17 @@ type HighlightResult = {
 // applied asynchronously via Shiki; until (or unless) it resolves, lines render
 // as plain text so content is never blocked on the highlighter. Words that the
 // language server reported information for are marked with an LSP bubble; click
-// the word to open a popover of clickable locations.
-export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }: CodeViewProps) {
+// the word to open a popover of clickable locations (only one open at a time).
+export function CodeView({
+	filename,
+	lines,
+	symbols,
+	focusLine,
+	windowID,
+	openBubble,
+	onBubbleChange,
+	onOpenLocation,
+}: CodeViewProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null)
 	const focusedRowRef = useRef<HTMLDivElement | null>(null)
 
@@ -107,6 +122,9 @@ export function CodeView({ filename, lines, symbols, focusLine, onOpenLocation }
 									segment={segment}
 									file={filename}
 									line={index}
+									windowID={windowID}
+									openBubble={openBubble}
+									onBubbleChange={onBubbleChange}
 									onOpenLocation={onOpenLocation}
 								/>
 							))}
@@ -122,33 +140,28 @@ function CodeSegment({
 	segment,
 	file,
 	line,
+	windowID,
+	openBubble,
+	onBubbleChange,
 	onOpenLocation,
 }: {
 	segment: LineSegment
 	file: string
 	line: number
+	windowID: string
+	openBubble: string | null
+	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocation
 }) {
-	const [open, setOpen] = useState(false)
 	const style = segment.color ? { color: segment.color } : undefined
-
-	// Close on Escape while the popover is open.
-	useEffect(() => {
-		if (!open) {
-			return
-		}
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape') {
-				setOpen(false)
-			}
-		}
-		document.addEventListener('keydown', handleKeyDown)
-		return () => document.removeEventListener('keydown', handleKeyDown)
-	}, [open])
 
 	if (!segment.symbol) {
 		return <span style={style}>{segment.content}</span>
 	}
+
+	const bubbleID = `${windowID}:${line}:${segment.markStart ?? -1}`
+	const open = openBubble === bubbleID
+	const toggle = () => onBubbleChange(open ? null : bubbleID)
 
 	return (
 		<span
@@ -158,11 +171,11 @@ function CodeSegment({
 			tabIndex={0}
 			aria-expanded={open}
 			aria-label={`Language server info for ${segment.symbol.name}`}
-			onClick={() => setOpen((value) => !value)}
+			onClick={toggle}
 			onKeyDown={(event) => {
 				if (event.key === 'Enter' || event.key === ' ') {
 					event.preventDefault()
-					setOpen((value) => !value)
+					toggle()
 				}
 			}}
 		>
@@ -174,7 +187,7 @@ function CodeSegment({
 						<LspPopover
 							symbol={segment.symbol}
 							current={{ file, line, character: segment.markStart ?? -1 }}
-							onClose={() => setOpen(false)}
+							onClose={() => onBubbleChange(null)}
 							onOpenLocation={onOpenLocation}
 						/>
 					) : null}

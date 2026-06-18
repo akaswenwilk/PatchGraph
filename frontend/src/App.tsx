@@ -432,6 +432,9 @@ function App() {
 	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
 	const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
 	const [activeWindowID, setActiveWindowID] = useState<string | null>(null)
+	// Id of the single LSP popover currently open across all windows, so opening
+	// one bubble closes any other. null when none is open.
+	const [openBubble, setOpenBubble] = useState<string | null>(null)
 	const [zoom, setZoom] = useState(1)
 	const [isHelpOpen, setIsHelpOpen] = useState(false)
 	// Live viewport (scroll offset + visible size) of the scroll container, kept in
@@ -514,6 +517,22 @@ function App() {
 			window.removeEventListener('keydown', handleKeyDown)
 		}
 	}, [isHelpOpen])
+
+	// Close the open LSP popover on Escape.
+	useEffect(() => {
+		if (openBubble === null) {
+			return
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setOpenBubble(null)
+			}
+		}
+
+		window.addEventListener('keydown', handleKeyDown)
+		return () => window.removeEventListener('keydown', handleKeyDown)
+	}, [openBubble])
 
 	// Ctrl+wheel zooms the canvas. We attach natively with passive:false because
 	// React's synthetic wheel listener is passive — preventDefault there can't
@@ -1298,6 +1317,9 @@ function App() {
 												lines={fileWindow.lines}
 												symbols={fileWindow.symbols}
 												focusLine={fileWindow.focusLine}
+												windowID={fileWindow.id}
+												openBubble={openBubble}
+												onBubbleChange={setOpenBubble}
 												onOpenLocation={(path, line) =>
 													openLocationInNewWindow(fileWindow.id, path, line)
 												}

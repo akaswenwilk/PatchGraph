@@ -243,8 +243,8 @@ export type LineSegment = {
 	// True only for the segment that contains the mark's first character, so the
 	// bubble/popover is rendered once even when a word spans multiple tokens.
 	bubbleAnchor?: boolean
-	// Start character of the mark, set on the anchor segment so the popover can
-	// identify which occurrence it belongs to.
+	// Start character of the mark this segment belongs to (same for every segment
+	// of one mark), identifying the occurrence for popover state.
 	markStart?: number
 }
 
@@ -285,7 +285,9 @@ export function splitTokensWithMarks(
 				color: token.color,
 				symbol: mark.symbol,
 				bubbleAnchor: markStart === mark.start,
-				markStart: markStart === mark.start ? mark.start : undefined,
+				// Same for every segment of the mark, so clicking any part of the
+				// word maps to one bubble identity.
+				markStart: mark.start,
 			})
 			cursor = markEnd
 		}

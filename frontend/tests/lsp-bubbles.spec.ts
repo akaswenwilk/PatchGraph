@@ -47,6 +47,27 @@ test('opening a Go file marks symbols with language-server bubbles', async ({ pa
 	await expect(popover).toBeHidden()
 })
 
+test('opening a second bubble closes the first (only one popover at a time)', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /lib\.go/ }).click()
+
+	const viewer = page.getByRole('region', { name: 'File viewer for lib.go' })
+	await expect(viewer.locator('.file-window-lsp-ready')).toBeVisible({ timeout: LSP_TIMEOUT })
+
+	const tokens = viewer.locator('.lsp-token')
+	await expect(tokens.nth(1)).toBeVisible({ timeout: LSP_TIMEOUT })
+
+	// Open the first bubble's popover, then open a different bubble's.
+	await tokens.nth(0).click()
+	await expect(viewer.locator('.lsp-popover')).toHaveCount(1)
+
+	await tokens.nth(1).click()
+	// The first popover closed automatically; exactly one stays open.
+	await expect(viewer.locator('.lsp-popover')).toHaveCount(1)
+})
+
 test('clicking an LSP location opens that file at the line in a new window', async ({ page }) => {
 	await page.goto('/')
 
