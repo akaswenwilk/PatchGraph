@@ -1044,8 +1044,12 @@ function App() {
 		const rect = workspace.getBoundingClientRect()
 		const pointerCanvasX = (drag.lastClientX - rect.left + workspace.scrollLeft) / zoomRef.current
 		const pointerCanvasY = (drag.lastClientY - rect.top + workspace.scrollTop) / zoomRef.current
-		const nextX = Math.max(0, pointerCanvasX - drag.grabOffsetX - PAN_MARGIN)
-		const nextY = Math.max(0, pointerCanvasY - drag.grabOffsetY - PAN_MARGIN)
+		// Allow dragging up/left into the surrounding pan margin (down to
+		// -PAN_MARGIN, where the window sits at the canvas edge), not just to the
+		// content origin. The lower bound keeps it within the scrollable canvas so
+		// the fixed render offset never needs to reflow mid-drag.
+		const nextX = Math.max(-PAN_MARGIN, pointerCanvasX - drag.grabOffsetX - PAN_MARGIN)
+		const nextY = Math.max(-PAN_MARGIN, pointerCanvasY - drag.grabOffsetY - PAN_MARGIN)
 		setOpenFiles((current) =>
 			current.map((fileWindow) =>
 				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
