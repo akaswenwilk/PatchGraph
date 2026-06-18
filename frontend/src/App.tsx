@@ -46,6 +46,9 @@ type OpenFile = {
 	// Zero-based line to scroll to and highlight when the window opens (set when
 	// the window was opened by clicking an LSP location).
 	focusLine: number | null
+	// When set, the window shows only this inclusive line span instead of the
+	// whole file — used to open a definition as just its own lines.
+	visibleRange: { start: number; end: number } | null
 	width: number | null
 	height: number | null
 	x: number
@@ -836,6 +839,7 @@ function App() {
 			lspState: 'loading' as LspState,
 			symbols: [],
 			focusLine: null,
+			visibleRange: null,
 			width,
 			height,
 			x,
@@ -906,13 +910,20 @@ function App() {
 		path: string,
 		line: number,
 		source?: { line: number; character: number },
+		visibleRange?: { start: number; end: number } | null,
 	) {
 		if (activeProject === null) {
 			return
 		}
 
 		const origin = openFiles.find((fileWindow) => fileWindow.id === originWindowID) ?? null
-		const pendingWindow = { ...createWindow(path, origin), focusLine: line }
+		// Highlight the definition's first line (cropped views render it at the top)
+		// or, for an un-cropped open, the opened line.
+		const pendingWindow = {
+			...createWindow(path, origin),
+			focusLine: visibleRange ? visibleRange.start : line,
+			visibleRange: visibleRange ?? null,
+		}
 		setOpenFiles((current) => [...current, pendingWindow])
 		setActiveWindowID(pendingWindow.id)
 
@@ -1449,11 +1460,12 @@ function App() {
 												lines={fileWindow.lines}
 												symbols={fileWindow.symbols}
 												focusLine={fileWindow.focusLine}
+												visibleRange={fileWindow.visibleRange}
 												windowID={fileWindow.id}
 												openBubble={openBubble}
 												onBubbleChange={setOpenBubble}
-												onOpenLocation={(path, line, source) =>
-													openLocationInNewWindow(fileWindow.id, path, line, source)
+												onOpenLocation={(path, line, source, visibleRange) =>
+													openLocationInNewWindow(fileWindow.id, path, line, source, visibleRange)
 												}
 												onStartConnection={startConnectionDraw}
 											/>

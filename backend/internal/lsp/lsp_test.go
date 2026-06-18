@@ -150,6 +150,122 @@ func TestFlattenSymbolsInformation(t *testing.T) {
 	}
 }
 
+func TestFlattenRangedPreservesRanges(t *testing.T) {
+	symbols := []documentSymbol{
+		{
+			Name:           "Greeter",
+			Kind:           23, // Struct
+			Range:          Range{Start: Position{5, 0}, End: Position{5, 21}},
+			SelectionRange: Range{Start: Position{5, 5}, End: Position{5, 12}},
+			Children: []documentSymbol{
+				{
+					Name:           "Greet",
+					Kind:           6, // Method
+					Range:          Range{Start: Position{8, 0}, End: Position{10, 1}},
+					SelectionRange: Range{Start: Position{8, 17}, End: Position{8, 22}},
+				},
+			},
+		},
+	}
+	var out []rangedSymbol
+	flattenRanged(symbols, &out)
+
+	want := []rangedSymbol{
+		{Kind: 23, Range: Range{Start: Position{5, 0}, End: Position{5, 21}}, SelectionRange: Range{Start: Position{5, 5}, End: Position{5, 12}}},
+		{Kind: 6, Range: Range{Start: Position{8, 0}, End: Position{10, 1}}, SelectionRange: Range{Start: Position{8, 17}, End: Position{8, 22}}},
+	}
+	if !reflect.DeepEqual(out, want) {
+		t.Errorf("got %+v, want %+v", out, want)
+	}
+}
+
+func TestFlattenRangedSymbolInformation(t *testing.T) {
+	// SymbolInformation form: no range/selectionRange, both come from location.
+	symbols := []documentSymbol{
+		{
+			Name:     "DoThing",
+			Kind:     12,
+			Location: &Location{URI: "file:///a.go", Range: Range{Start: Position{10, 4}, End: Position{12, 1}}},
+		},
+	}
+	var out []rangedSymbol
+	flattenRanged(symbols, &out)
+
+	want := []rangedSymbol{{
+		Kind:           12,
+		Range:          Range{Start: Position{10, 4}, End: Position{12, 1}},
+		SelectionRange: Range{Start: Position{10, 4}, End: Position{12, 1}},
+	}}
+	if !reflect.DeepEqual(out, want) {
+		t.Errorf("got %+v, want %+v", out, want)
+	}
+}
+
+func TestSelectDefinitionRange(t *testing.T) {
+	greeter := rangedSymbol{
+		Kind:           23, // Struct
+		Range:          Range{Start: Position{5, 0}, End: Position{12, 1}},
+		SelectionRange: Range{Start: Position{5, 5}, End: Position{5, 12}},
+	}
+	greet := rangedSymbol{
+		Kind:           6, // Method (nested inside the struct's range)
+		Range:          Range{Start: Position{8, 0}, End: Position{10, 1}},
+		SelectionRange: Range{Start: Position{8, 17}, End: Position{8, 22}},
+	}
+	local := rangedSymbol{
+		Kind:           13, // Variable — not a qualifying kind
+		Range:          Range{Start: Position{9, 1}, End: Position{9, 10}},
+		SelectionRange: Range{Start: Position{9, 1}, End: Position{9, 6}},
+	}
+	symbols := []rangedSymbol{greeter, greet, local}
+
+	// A position on the method name resolves to the method's full body, not the
+	// enclosing struct (innermost qualifying symbol wins).
+	if got := selectDefinitionRange(symbols, Position{8, 18}); got == nil {
+		t.Fatal("expected a range for the method name position")
+	} else if *got != greet.Range {
+		t.Errorf("method range = %+v, want %+v", *got, greet.Range)
+	}
+
+	// A position on the struct name resolves to the struct's range.
+	if got := selectDefinitionRange(symbols, Position{5, 6}); got == nil {
+		t.Fatal("expected a range for the struct name position")
+	} else if *got != greeter.Range {
+		t.Errorf("struct range = %+v, want %+v", *got, greeter.Range)
+	}
+
+	// A position on a non-qualifying (variable) symbol yields no range.
+	if got := selectDefinitionRange(symbols, Position{9, 2}); got != nil {
+		t.Errorf("variable position = %+v, want nil", *got)
+	}
+
+	// A position matching nothing yields no range.
+	if got := selectDefinitionRange(symbols, Position{0, 0}); got != nil {
+		t.Errorf("unmatched position = %+v, want nil", *got)
+	}
+}
+
+func TestRangeContains(t *testing.T) {
+	r := Range{Start: Position{2, 4}, End: Position{4, 6}}
+	cases := []struct {
+		pos  Position
+		want bool
+	}{
+		{Position{3, 0}, true},  // interior line
+		{Position{2, 4}, true},  // exact start
+		{Position{4, 6}, true},  // exact end
+		{Position{2, 3}, false}, // before start char on start line
+		{Position{4, 7}, false}, // past end char on end line
+		{Position{1, 9}, false}, // before start line
+		{Position{5, 0}, false}, // after end line
+	}
+	for _, tc := range cases {
+		if got := rangeContains(r, tc.pos); got != tc.want {
+			t.Errorf("rangeContains(%+v) = %v, want %v", tc.pos, got, tc.want)
+		}
+	}
+}
+
 func TestSymbolKindName(t *testing.T) {
 	if got := symbolKindName(12); got != "Function" {
 		t.Errorf("kind 12 = %q, want Function", got)
@@ -236,6 +352,20 @@ func Use() string {
 	}
 	if len(greet.References) < 2 {
 		t.Errorf("Greet references = %d, want >= 2", len(greet.References))
+	}
+
+	// Greet's definition carries the full extent of the method declaration: the
+	// `func` line (index 8) through its closing brace (index 10), so the UI can
+	// open just the definition instead of the whole file.
+	if len(greet.Definitions) == 0 {
+		t.Fatal("Greet has no definitions")
+	}
+	defRange := greet.Definitions[0].DefRange
+	if defRange == nil {
+		t.Fatal("Greet definition has no DefRange")
+	}
+	if defRange.Start.Line != 8 || defRange.End.Line != 10 {
+		t.Errorf("Greet DefRange lines = %d..%d, want 8..10", defRange.Start.Line, defRange.End.Line)
 	}
 
 	// Out-of-repo locations are filtered out: every reported location is a

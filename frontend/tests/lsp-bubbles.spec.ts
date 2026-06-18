@@ -105,6 +105,39 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 	await expect(page.locator('.lsp-popover')).toHaveCount(0)
 })
 
+test('opening a definition shows only the definition lines, not the whole file', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /lib\.go/ }).click()
+
+	const viewers = page.getByRole('region', { name: 'File viewer for lib.go' })
+	const source = viewers.first()
+	await expect(source.locator('.file-window-lsp-ready')).toBeVisible({ timeout: LSP_TIMEOUT })
+
+	// The source window shows the whole file (several lines).
+	const sourceRows = await source.locator('.code-row').count()
+	expect(sourceRows).toBeGreaterThan(1)
+
+	// Open a symbol's popover and follow its definition (the first link is under
+	// the Definitions group, which renders first).
+	await source.locator('.lsp-token').first().click()
+	const popover = page.locator('.lsp-popover').first()
+	await expect(popover).toContainText('Definitions')
+	await popover
+		.locator('.lsp-popover-group', { hasText: 'Definitions' })
+		.locator('.lsp-popover-location-link')
+		.first()
+		.click()
+
+	// The new window is cropped to just the declaration. The fixture's symbols are
+	// single-line declarations, so the opened window shows exactly one code row —
+	// far fewer than the full source file.
+	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
+	const opened = viewers.nth(1)
+	await expect(opened.locator('.code-row')).toHaveCount(1)
+})
+
 test('opening a file from a location draws a connector that clears when the window closes', async ({
 	page,
 }) => {
