@@ -2,6 +2,19 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
 import { CodeView } from './CodeView'
 import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
+import { ConnectionsOverlay } from './Connections'
+import {
+	findSnapAnchor,
+	type Connection,
+	type ConnectionDraft,
+	type DotAnchor,
+} from './connectionGeometry'
+
+function anchorKey(anchor: { kind: string; windowID: string; line?: number; character?: number }) {
+	return anchor.kind === 'dot'
+		? `d:${anchor.windowID}:${anchor.line}:${anchor.character}`
+		: `w:${anchor.windowID}`
+}
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -435,6 +448,12 @@ function App() {
 	// Id of the single LSP popover currently open across all windows, so opening
 	// one bubble closes any other. null when none is open.
 	const [openBubble, setOpenBubble] = useState<string | null>(null)
+	// Connector lines between symbol bubble dots and windows.
+	const [connections, setConnections] = useState<Connection[]>([])
+	// The connector currently being dragged from a dot, if any.
+	const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null)
+	// The selected connector (deletable via Backspace/Delete).
+	const [selectedConnection, setSelectedConnection] = useState<string | null>(null)
 	const [zoom, setZoom] = useState(1)
 	const [isHelpOpen, setIsHelpOpen] = useState(false)
 	// Live viewport (scroll offset + visible size) of the scroll container, kept in
@@ -537,6 +556,37 @@ function App() {
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
 	}, [openBubble])
+
+	// While a connector is selected: Backspace/Delete removes it, Escape and any
+	// click elsewhere deselect it. (Clicking a connector stops propagation, so
+	// this click handler only fires for clicks off the line.)
+	useEffect(() => {
+		if (selectedConnection === null) {
+			return
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			const tag = document.activeElement?.tagName
+			if (tag === 'INPUT' || tag === 'TEXTAREA') {
+				return
+			}
+			if (event.key === 'Backspace' || event.key === 'Delete') {
+				event.preventDefault()
+				setConnections((current) => current.filter((connection) => connection.id !== selectedConnection))
+				setSelectedConnection(null)
+			} else if (event.key === 'Escape') {
+				setSelectedConnection(null)
+			}
+		}
+		const handleClick = () => setSelectedConnection(null)
+
+		window.addEventListener('keydown', handleKeyDown)
+		window.addEventListener('click', handleClick)
+		return () => {
+			window.removeEventListener('keydown', handleKeyDown)
+			window.removeEventListener('click', handleClick)
+		}
+	}, [selectedConnection])
 
 	// Ctrl+wheel zooms the canvas. We attach natively with passive:false because
 	// React's synthetic wheel listener is passive — preventDefault there can't
@@ -851,7 +901,12 @@ function App() {
 
 	// Opens the file referenced by an LSP location in a new window beside the
 	// source window, scrolled to and highlighting the target line.
-	function openLocationInNewWindow(originWindowID: string, path: string, line: number) {
+	function openLocationInNewWindow(
+		originWindowID: string,
+		path: string,
+		line: number,
+		source?: { line: number; character: number },
+	) {
 		if (activeProject === null) {
 			return
 		}
@@ -861,8 +916,57 @@ function App() {
 		setOpenFiles((current) => [...current, pendingWindow])
 		setActiveWindowID(pendingWindow.id)
 
+		// Draw a connector from the clicked symbol's bubble dot to the new window.
+		if (source) {
+			const connectionSource: DotAnchor = {
+				kind: 'dot',
+				windowID: originWindowID,
+				line: source.line,
+				character: source.character,
+			}
+			addConnection(connectionSource, { kind: 'window', windowID: pendingWindow.id })
+		}
+
 		void loadFileContents(activeProject.id, path, pendingWindow.id)
 		void loadLspInfo(activeProject.id, path, pendingWindow.id)
+	}
+
+	function addConnection(source: Connection['source'], target: Connection['target']) {
+		const id = `${anchorKey(source)}->${anchorKey(target)}`
+		setConnections((current) =>
+			current.some((connection) => connection.id === id)
+				? current
+				: [...current, { id, source, target }],
+		)
+	}
+
+	const removeConnection = (id: string) =>
+		setConnections((current) => current.filter((connection) => connection.id !== id))
+
+	// Begin dragging a new connector from a symbol's bubble dot. Tracks the
+	// pointer, previews snapping to the nearest dot/window, and on release either
+	// commits the connector (when snapped) or discards it (when free).
+	function startConnectionDraw(source: DotAnchor, clientX: number, clientY: number) {
+		setSelectedConnection(null)
+		const start = { x: clientX, y: clientY }
+		setConnectionDraft({ source, pointer: start, snap: findSnapAnchor(start, source) })
+
+		const handleMove = (event: PointerEvent) => {
+			const pointer = { x: event.clientX, y: event.clientY }
+			setConnectionDraft({ source, pointer, snap: findSnapAnchor(pointer, source) })
+		}
+		const handleUp = (event: PointerEvent) => {
+			window.removeEventListener('pointermove', handleMove)
+			window.removeEventListener('pointerup', handleUp)
+			const snap = findSnapAnchor({ x: event.clientX, y: event.clientY }, source)
+			if (snap) {
+				addConnection(source, snap)
+			}
+			setConnectionDraft(null)
+		}
+
+		window.addEventListener('pointermove', handleMove)
+		window.addEventListener('pointerup', handleUp)
 	}
 
 	async function loadLspInfo(projectID: string, filename: string, windowID: string) {
@@ -950,7 +1054,9 @@ function App() {
 
 		const rect = fileWindow.getBoundingClientRect()
 		const minWidth = 320
-		const minHeight = 280
+		// Low enough to shrink the code area down to roughly a single visible line
+		// (the header is ~85px; this leaves room for about one row beneath it).
+		const minHeight = 140
 		// The canvas is scrollable, so windows may grow well past the viewport.
 		const maxWidth = 4000
 		const maxHeight = 4000
@@ -1284,6 +1390,7 @@ function App() {
 							<section
 								key={fileWindow.id}
 								className={isActive ? 'file-window file-window-active' : 'file-window'}
+								data-window-id={fileWindow.id}
 								aria-label={`File viewer for ${fileWindow.filename}`}
 								style={{
 									width: (fileWindow.width ?? DEFAULT_WINDOW_WIDTH) + 'px',
@@ -1345,9 +1452,10 @@ function App() {
 												windowID={fileWindow.id}
 												openBubble={openBubble}
 												onBubbleChange={setOpenBubble}
-												onOpenLocation={(path, line) =>
-													openLocationInNewWindow(fileWindow.id, path, line)
+												onOpenLocation={(path, line, source) =>
+													openLocationInNewWindow(fileWindow.id, path, line, source)
 												}
+												onStartConnection={startConnectionDraw}
 											/>
 										</div>
 									</>
@@ -1376,6 +1484,14 @@ function App() {
 					})}
 				</div>
 			</main>
+
+			<ConnectionsOverlay
+				connections={connections}
+				draft={connectionDraft}
+				selectedID={selectedConnection}
+				onSelect={setSelectedConnection}
+				onRemove={removeConnection}
+			/>
 
 			{activeProject !== null ? (
 				<Minimap

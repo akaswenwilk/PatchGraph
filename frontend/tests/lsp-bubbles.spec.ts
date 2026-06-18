@@ -105,6 +105,94 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 	await expect(page.locator('.lsp-popover')).toHaveCount(0)
 })
 
+test('opening a file from a location draws a connector that clears when the window closes', async ({
+	page,
+}) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /lib\.go/ }).click()
+
+	const viewers = page.getByRole('region', { name: 'File viewer for lib.go' })
+	await expect(viewers.first().locator('.file-window-lsp-ready')).toBeVisible({
+		timeout: LSP_TIMEOUT,
+	})
+
+	await viewers.first().locator('.lsp-token').first().click()
+	await page.locator('.lsp-popover-location-link').first().click()
+	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
+
+	// A connector line was drawn between the source dot and the new window.
+	const lines = page.locator('.connections-overlay .connection-line')
+	await expect(lines).toHaveCount(1)
+
+	// Closing the opened window removes its connector.
+	await viewers.nth(1).getByRole('button', { name: /^Close / }).click()
+	await expect(viewers).toHaveCount(1)
+	await expect(lines).toHaveCount(0)
+})
+
+test('a connector can be drawn between two dots, then selected and deleted', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /lib\.go/ }).click()
+
+	const viewer = page.getByRole('region', { name: 'File viewer for lib.go' })
+	await expect(viewer.locator('.file-window-lsp-ready')).toBeVisible({ timeout: LSP_TIMEOUT })
+
+	const dots = page.locator('.lsp-bubble-dot')
+	await expect(dots.nth(1)).toBeVisible({ timeout: LSP_TIMEOUT })
+	const a = await dots.nth(0).boundingBox()
+	const b = await dots.nth(1).boundingBox()
+	if (a === null || b === null) {
+		throw new Error('Expected two bubble dots')
+	}
+	const aCenter = { x: a.x + a.width / 2, y: a.y + a.height / 2 }
+	const bCenter = { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+
+	const lines = page.locator('.connections-overlay .connection-line')
+	await expect(lines).toHaveCount(0)
+
+	// Drag from one dot to another: it snaps and creates a connector.
+	await page.mouse.move(aCenter.x, aCenter.y)
+	await page.mouse.down()
+	await page.mouse.move(bCenter.x, bCenter.y, { steps: 12 })
+	await page.mouse.up()
+	await expect(lines).toHaveCount(1)
+	await expect(lines.first()).toBeVisible()
+
+	// Click the connector to select it, then Backspace to delete it.
+	await page.mouse.click((aCenter.x + bCenter.x) / 2, (aCenter.y + bCenter.y) / 2)
+	await expect(page.locator('.connection-line-selected')).toHaveCount(1)
+	await page.keyboard.press('Backspace')
+	await expect(lines).toHaveCount(0)
+})
+
+test('a connector dragged onto nothing is not created', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /lib\.go/ }).click()
+
+	const viewer = page.getByRole('region', { name: 'File viewer for lib.go' })
+	await expect(viewer.locator('.file-window-lsp-ready')).toBeVisible({ timeout: LSP_TIMEOUT })
+
+	const dot = page.locator('.lsp-bubble-dot').first()
+	const box = await dot.boundingBox()
+	if (box === null) {
+		throw new Error('Expected a bubble dot')
+	}
+
+	// Drag from a dot out onto empty canvas (far from any dot/window) and release.
+	await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+	await page.mouse.down()
+	await page.mouse.move(box.x + 600, box.y + 360, { steps: 12 })
+	await page.mouse.up()
+
+	await expect(page.locator('.connections-overlay .connection-line')).toHaveCount(0)
+})
+
 test('opening a plain-text file shows no language-server bubbles', async ({ page }) => {
 	await page.goto('/')
 

@@ -14,11 +14,24 @@ import {
 	type LspLocation,
 	type LspSymbol,
 } from './lsp'
+import type { DotAnchor } from './connectionGeometry'
 
+// Begin dragging a new connector from a bubble dot.
+type StartConnection = (source: DotAnchor, clientX: number, clientY: number) => void
+
+// Handler used by location items: open the file at a line.
 type OpenLocation = (path: string, line: number) => void
 
+// Handler at the CodeView boundary: also carries the source occurrence (the
+// bubble the location was opened from) so a connector can be drawn from it.
+type OpenLocationFromSymbol = (
+	path: string,
+	line: number,
+	source: { line: number; character: number },
+) => void
+
 // The occurrence a popover is being shown for, so its own reference can be
-// excluded from the references list.
+// excluded from the references list and used as a connector's source.
 type CurrentOccurrence = { file: string; line: number; character: number }
 
 type CodeViewProps = {
@@ -33,7 +46,8 @@ type CodeViewProps = {
 	// closes any other.
 	openBubble: string | null
 	onBubbleChange: (id: string | null) => void
-	onOpenLocation?: OpenLocation
+	onOpenLocation?: OpenLocationFromSymbol
+	onStartConnection?: StartConnection
 }
 
 type HighlightResult = {
@@ -57,6 +71,7 @@ export function CodeView({
 	openBubble,
 	onBubbleChange,
 	onOpenLocation,
+	onStartConnection,
 }: CodeViewProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null)
 	const focusedRowRef = useRef<HTMLDivElement | null>(null)
@@ -128,6 +143,7 @@ export function CodeView({
 									openBubble={openBubble}
 									onBubbleChange={onBubbleChange}
 									onOpenLocation={onOpenLocation}
+									onStartConnection={onStartConnection}
 								/>
 							))}
 						</span>
@@ -146,6 +162,7 @@ function CodeSegment({
 	openBubble,
 	onBubbleChange,
 	onOpenLocation,
+	onStartConnection,
 }: {
 	segment: LineSegment
 	file: string
@@ -153,7 +170,8 @@ function CodeSegment({
 	windowID: string
 	openBubble: string | null
 	onBubbleChange: (id: string | null) => void
-	onOpenLocation?: OpenLocation
+	onOpenLocation?: OpenLocationFromSymbol
+	onStartConnection?: StartConnection
 }) {
 	const style = segment.color ? { color: segment.color } : undefined
 	const tokenRef = useRef<HTMLSpanElement>(null)
@@ -186,7 +204,29 @@ function CodeSegment({
 			{segment.content}
 			{segment.bubbleAnchor ? (
 				<span className="lsp-bubble">
-					<span className="lsp-bubble-dot" aria-hidden="true" />
+					<span
+						className="lsp-bubble-dot"
+						data-bubble-window={windowID}
+						data-bubble-line={line}
+						data-bubble-char={segment.markStart ?? -1}
+						title="Drag to connect"
+						onPointerDown={(event) => {
+							// Start drawing a connector; don't toggle the popover or focus.
+							event.stopPropagation()
+							event.preventDefault()
+							onStartConnection?.(
+								{
+									kind: 'dot',
+									windowID,
+									line,
+									character: segment.markStart ?? -1,
+								},
+								event.clientX,
+								event.clientY,
+							)
+						}}
+						onClick={(event) => event.stopPropagation()}
+					/>
 					{open ? (
 						<LspPopover
 							symbol={segment.symbol}
@@ -216,18 +256,19 @@ function LspPopover({
 	current: CurrentOccurrence
 	anchorRef: React.RefObject<HTMLElement | null>
 	onClose: () => void
-	onOpenLocation?: OpenLocation
+	onOpenLocation?: OpenLocationFromSymbol
 }) {
 	// References include the occurrence being viewed; drop it so the list only
 	// shows other places the symbol appears.
 	const references = referencesExcludingSelf(symbol, current.file, current.line, current.character)
 	const total = symbol.definitions.length + references.length + symbol.implementations.length
 
-	// Opening a location closes this popover as it opens the new window.
+	// Opening a location closes this popover and passes the source occurrence
+	// (this bubble) so a connector line can be drawn from it to the new window.
 	const openLocation: OpenLocation | undefined = onOpenLocation
 		? (path, line) => {
 				onClose()
-				onOpenLocation(path, line)
+				onOpenLocation(path, line, { line: current.line, character: current.character })
 			}
 		: undefined
 
