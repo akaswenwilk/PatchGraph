@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -15,23 +17,86 @@ import (
 
 	"github.com/akaswenwilk/PatchGraph/backend/internal/lsp"
 	"github.com/akaswenwilk/PatchGraph/backend/internal/projects"
+	"github.com/akaswenwilk/PatchGraph/backend/internal/web"
 )
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+
+	switch os.Args[1] {
+	case "start":
+		if err := start(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "-h", "--help", "help":
+		usage()
+	default:
+		log.Printf("unknown command %q", os.Args[1])
+		usage()
+		os.Exit(2)
+	}
+}
+
+func start(args []string) error {
+	flags := flag.NewFlagSet("start", flag.ExitOnError)
+	port := flags.String("port", envWithDefault("PORT", "8080"), "HTTP port to listen on")
+	projectsRoot := flags.String("projects", defaultProjectsRoot(), "directory containing local git projects")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(*projectsRoot) != "" {
+		if err := os.Setenv(projects.RootEnvVar, *projectsRoot); err != nil {
+			return err
+		}
 	}
 
 	server := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + *port,
 		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("server failed: %v", err)
+		return fmt.Errorf("server failed: %w", err)
 	}
+
+	return nil
+}
+
+func usage() {
+	_, _ = fmt.Fprintf(os.Stderr, `Usage:
+  patchgraph start [--port 8080] [--projects ~/projects]
+
+Environment:
+  PORT                       default port when --port is omitted
+  %s      default projects root when --projects is omitted
+`, projects.RootEnvVar)
+}
+
+func envWithDefault(name string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+
+	return value
+}
+
+func defaultProjectsRoot() string {
+	if root := strings.TrimSpace(os.Getenv(projects.RootEnvVar)); root != "" {
+		return root
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+
+	return home + string(os.PathSeparator) + "projects"
 }
 
 func projectsHandler() ([]projects.Project, error) {
@@ -94,10 +159,6 @@ func newMux(
 	analyzeFile func(string, string) (lsp.FileAnalysis, error),
 ) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("PatchGraph backend is running\n"))
-	})
 	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -138,6 +199,10 @@ func newMux(
 			http.NotFound(w, r)
 		}
 	})
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.Handle("/", web.Handler())
 
 	return mux
 }

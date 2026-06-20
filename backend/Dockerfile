@@ -28,4 +28,4 @@ COPY --from=build /go/bin/gopls /usr/local/bin/gopls
 
 EXPOSE 8080
 
-ENTRYPOINT ["patchgraph-server"]
+ENTRYPOINT ["patchgraph-server", "start"]

@@ -72,6 +72,35 @@ func TestProjectsEndpointRejectsPost(t *testing.T) {
 	}
 }
 
+func TestRootServesFrontend(t *testing.T) {
+	handler := newMux(nil, nil, nil, nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "PatchGraph") {
+		t.Fatalf("body = %q, want embedded frontend content", body)
+	}
+}
+
+func TestUnknownAPIRouteReturnsNotFound(t *testing.T) {
+	handler := newMux(nil, nil, nil, nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/unknown", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
 func TestProjectEndpointReturnsDetail(t *testing.T) {
 	handler := newMux(
 		func() ([]projects.Project, error) { return nil, nil },
