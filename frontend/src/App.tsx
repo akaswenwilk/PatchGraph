@@ -474,6 +474,11 @@ function App() {
 	const [projectError, setProjectError] = useState('')
 	const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null)
 	const [isGitMenuOpen, setIsGitMenuOpen] = useState(false)
+	// Viewport coordinates for the Git flyout. It is rendered with position:fixed so
+	// it escapes the sidebar's `overflow: hidden` clip and sits to the right of the
+	// file explorer instead of being cut off inside it.
+	const [gitMenuPosition, setGitMenuPosition] = useState<{ top: number; left: number } | null>(null)
+	const gitMenuRef = useRef<HTMLDivElement | null>(null)
 	const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false)
 	const [isSwitchingBranch, setIsSwitchingBranch] = useState(false)
 	const [branchError, setBranchError] = useState('')
@@ -604,6 +609,32 @@ function App() {
 			window.removeEventListener('pointerdown', handlePointerDown)
 			window.removeEventListener('keydown', handleKeyDown)
 		}
+	}, [isGitMenuOpen])
+
+	// Anchor the Git flyout just past the right edge of the file explorer. We read
+	// the sidebar's rect (it is position:fixed, so viewport coordinates are stable)
+	// rather than relying on absolute positioning, which the sidebar's overflow clips.
+	useLayoutEffect(() => {
+		if (!isGitMenuOpen) {
+			setGitMenuPosition(null)
+			return
+		}
+
+		const updatePosition = () => {
+			const trigger = gitMenuRef.current
+			if (trigger === null) {
+				return
+			}
+
+			const sidebar = trigger.closest('.sidebar')
+			const triggerRect = trigger.getBoundingClientRect()
+			const rightEdge = (sidebar ?? trigger).getBoundingClientRect().right
+			setGitMenuPosition({ top: triggerRect.top, left: rightEdge + 10 })
+		}
+
+		updatePosition()
+		window.addEventListener('resize', updatePosition)
+		return () => window.removeEventListener('resize', updatePosition)
 	}, [isGitMenuOpen])
 
 	// Dismiss the help popover on Escape or a click outside it.
@@ -1530,7 +1561,7 @@ function App() {
 
 								<div className="explorer-actions">
 									{activeProject !== null ? (
-										<div className="git-menu">
+										<div className="git-menu" ref={gitMenuRef}>
 											<button
 												type="button"
 												className="git-menu-button"
@@ -1549,7 +1580,16 @@ function App() {
 											</button>
 
 											{isGitMenuOpen ? (
-												<div className="git-menu-popover" role="dialog" aria-label="Git">
+												<div
+													className="git-menu-popover"
+													role="dialog"
+													aria-label="Git"
+													style={
+														gitMenuPosition === null
+															? undefined
+															: { top: gitMenuPosition.top, left: gitMenuPosition.left }
+													}
+												>
 													<p className="git-menu-title">Git</p>
 
 													<div className="git-menu-field">

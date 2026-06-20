@@ -214,11 +214,13 @@
 	transform: scale(0.96);
 }
 
-/* Flyout to the right of the Git button so it never crowds the explorer. */
+/* Flyout pinned to the right of the file explorer. Positioned with fixed +
+   JS-computed coordinates so it escapes the sidebar's overflow clip instead of
+   being cut off inside it. */
 .git-menu-popover {
-	position: absolute;
+	position: fixed;
 	top: 0;
-	left: calc(100% + 10px);
+	left: 0;
 	z-index: 26;
 	width: 260px;
 	padding: 14px 16px;
