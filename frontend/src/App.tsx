@@ -16,7 +16,7 @@ function anchorKey(anchor: { kind: string; windowID: string; line?: number; char
 		: `w:${anchor.windowID}`
 }
 
-type LoadState = 'idle' | 'loading' | 'ready' | 'error'
+type LoadState = 'idle' | 'loading' | 'ready' | 'deleted' | 'error'
 
 // LSP analysis is optional: 'unsupported' means the file's language has no
 // configured language server, so no bubbles are shown and it is not an error.
@@ -32,6 +32,8 @@ type ProjectDetail = {
 	id: string
 	name: string
 	path: string
+	currentBranch: string
+	branches: string[]
 	files: string[]
 }
 
@@ -115,12 +117,23 @@ function isProjectDetail(value: unknown): value is ProjectDetail {
 
 	const candidate = value as Record<string, unknown>
 	return (
-		typeof candidate.id === 'string' &&
-		typeof candidate.name === 'string' &&
-		typeof candidate.path === 'string' &&
-		Array.isArray(candidate.files) &&
-		candidate.files.every((entry) => typeof entry === 'string')
+			typeof candidate.id === 'string' &&
+			typeof candidate.name === 'string' &&
+			typeof candidate.path === 'string' &&
+			typeof candidate.currentBranch === 'string' &&
+			Array.isArray(candidate.branches) &&
+			candidate.branches.every((entry) => typeof entry === 'string') &&
+			Array.isArray(candidate.files) &&
+			candidate.files.every((entry) => typeof entry === 'string')
 	)
+}
+
+function normalizeProjectDetail(project: ProjectDetail): ProjectDetail {
+	return {
+		...project,
+		branches: [...project.branches].sort((left, right) => left.localeCompare(right)),
+		files: [...project.files].sort((left, right) => left.localeCompare(right)),
+	}
 }
 
 function MenuIcon() {
@@ -444,6 +457,9 @@ function App() {
 	const [projectState, setProjectState] = useState<LoadState>('idle')
 	const [projectError, setProjectError] = useState('')
 	const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null)
+	const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false)
+	const [isSwitchingBranch, setIsSwitchingBranch] = useState(false)
+	const [branchError, setBranchError] = useState('')
 	const [fileTree, setFileTree] = useState<TreeNode | null>(null)
 	const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
 	const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
@@ -516,6 +532,33 @@ function App() {
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
 	}, [isModalOpen])
+
+	// Dismiss the branch menu on Escape or a click outside it.
+	useEffect(() => {
+		if (!isBranchMenuOpen) {
+			return
+		}
+
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target as HTMLElement
+			if (target.closest('.branch-picker') === null) {
+				setIsBranchMenuOpen(false)
+			}
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setIsBranchMenuOpen(false)
+			}
+		}
+
+		window.addEventListener('pointerdown', handlePointerDown)
+		window.addEventListener('keydown', handleKeyDown)
+		return () => {
+			window.removeEventListener('pointerdown', handlePointerDown)
+			window.removeEventListener('keydown', handleKeyDown)
+		}
+	}, [isBranchMenuOpen])
 
 	// Dismiss the help popover on Escape or a click outside it.
 	useEffect(() => {
@@ -786,19 +829,20 @@ function App() {
 				throw new Error('Project response was invalid')
 			}
 
-			const project = {
-				...data,
-				files: [...data.files].sort((left, right) => left.localeCompare(right)),
-			}
+			const project = normalizeProjectDetail(data)
 			setActiveProject(project)
 			setFileTree(buildTree(project.files))
 			setExpandedPaths(new Set([project.id]))
 			setProjectState('ready')
 			setIsModalOpen(false)
+			setIsBranchMenuOpen(false)
+			setBranchError('')
 		} catch (error) {
 			setActiveProject(null)
 			setFileTree(null)
 			setExpandedPaths(new Set())
+			setIsBranchMenuOpen(false)
+			setBranchError('')
 			setProjectState('error')
 			setProjectError(error instanceof Error ? error.message : 'Unknown error')
 		}
@@ -848,28 +892,44 @@ function App() {
 		}
 	}
 
+	async function fetchFileLines(projectID: string, filename: string) {
+		const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/files`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({ filename }),
+		})
+		if (response.status === 404) {
+			return { state: 'deleted' as const, lines: [] }
+		}
+		if (!response.ok) {
+			throw new Error(`Request failed with status ${response.status}`)
+		}
+
+		const data: unknown = await response.json()
+		if (!Array.isArray(data) || data.some((entry) => typeof entry !== 'string')) {
+			throw new Error('File response was not a string array')
+		}
+
+		return { state: 'ready' as const, lines: data }
+	}
+
 	async function loadFileContents(projectID: string, filename: string, windowID: string) {
 		try {
-			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/files`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify({ filename }),
-			})
-			if (!response.ok) {
-				throw new Error(`Request failed with status ${response.status}`)
-			}
-
-			const data: unknown = await response.json()
-			if (!Array.isArray(data) || data.some((entry) => typeof entry !== 'string')) {
-				throw new Error('File response was not a string array')
-			}
+			const result = await fetchFileLines(projectID, filename)
 
 			setOpenFiles((current) =>
 				current.map((fileWindow) =>
 					fileWindow.id === windowID
-						? { ...fileWindow, state: 'ready', error: '', lines: data }
+						? {
+								...fileWindow,
+								state: result.state,
+								error: '',
+								lines: result.lines,
+								lspState: result.state === 'deleted' ? 'idle' : fileWindow.lspState,
+								symbols: result.state === 'deleted' ? [] : fileWindow.symbols,
+							}
 						: fileWindow,
 				),
 			)
@@ -882,6 +942,8 @@ function App() {
 								state: 'error',
 								error: error instanceof Error ? error.message : 'Unknown error',
 								lines: [],
+								lspState: 'idle',
+								symbols: [],
 							}
 						: fileWindow,
 				),
@@ -901,6 +963,101 @@ function App() {
 		// Contents and language-server info load in parallel; neither blocks the other.
 		void loadFileContents(activeProject.id, filename, pendingWindow.id)
 		void loadLspInfo(activeProject.id, filename, pendingWindow.id)
+	}
+
+	async function handleBranchCheckout(branch: string) {
+		if (activeProject === null || branch === activeProject.currentBranch || isSwitchingBranch) {
+			setIsBranchMenuOpen(false)
+			return
+		}
+
+		const projectID = activeProject.id
+		setIsSwitchingBranch(true)
+		setBranchError('')
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/checkout`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({ branch }),
+			})
+			if (!response.ok) {
+				const message = (await response.text()).trim()
+				throw new Error(message || `Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			if (!isProjectDetail(data)) {
+				throw new Error('Project response was invalid')
+			}
+
+			const project = normalizeProjectDetail(data)
+			setActiveProject(project)
+			setFileTree(buildTree(project.files))
+			setExpandedPaths((current) => new Set([...current, project.id]))
+			setIsBranchMenuOpen(false)
+			setOpenBubble(null)
+
+			const windowsToReload = openFiles
+			setOpenFiles((current) =>
+				current.map((fileWindow) => ({
+					...fileWindow,
+					state: 'loading',
+					error: '',
+					lines: [],
+					lspState: 'loading',
+					symbols: [],
+				})),
+			)
+
+			for (const fileWindow of windowsToReload) {
+				void reloadFileWindow(project.id, fileWindow.filename, fileWindow.id)
+			}
+		} catch (error) {
+			setBranchError(error instanceof Error ? error.message : 'Unknown error')
+		} finally {
+			setIsSwitchingBranch(false)
+		}
+	}
+
+	async function reloadFileWindow(projectID: string, filename: string, windowID: string) {
+		try {
+			const result = await fetchFileLines(projectID, filename)
+			setOpenFiles((current) =>
+				current.map((fileWindow) =>
+					fileWindow.id === windowID
+						? {
+								...fileWindow,
+								state: result.state,
+								error: '',
+								lines: result.lines,
+								lspState: result.state === 'deleted' ? 'idle' : 'loading',
+								symbols: [],
+							}
+						: fileWindow,
+				),
+			)
+			if (result.state === 'ready') {
+				void loadLspInfo(projectID, filename, windowID)
+			}
+		} catch (error) {
+			setOpenFiles((current) =>
+				current.map((fileWindow) =>
+					fileWindow.id === windowID
+						? {
+								...fileWindow,
+								state: 'error',
+								error: error instanceof Error ? error.message : 'Unknown error',
+								lines: [],
+								lspState: 'idle',
+								symbols: [],
+							}
+						: fileWindow,
+				),
+			)
+		}
 	}
 
 	// Opens the file referenced by an LSP location in a new window beside the
@@ -1322,27 +1479,82 @@ function App() {
 									</p>
 								</div>
 
-								<div className="explorer-help">
-									<button
-										type="button"
-										className="explorer-help-button"
-										aria-label="Show canvas commands"
-										aria-expanded={isHelpOpen}
-										onClick={() => setIsHelpOpen((value) => !value)}
-									>
-										?
-									</button>
+								<div className="explorer-actions">
+									{activeProject !== null ? (
+										<div className="branch-picker">
+											<button
+												type="button"
+												className="branch-button"
+												aria-label="Switch git branch"
+												aria-expanded={isBranchMenuOpen}
+												disabled={isSwitchingBranch}
+												onClick={() => {
+													setBranchError('')
+													setIsBranchMenuOpen((value) => !value)
+												}}
+											>
+												<span className="branch-button-label">{activeProject.currentBranch}</span>
+												<span aria-hidden="true">▾</span>
+											</button>
 
-									{isHelpOpen ? (
-										<div className="explorer-help-popover" role="dialog" aria-label="Canvas commands">
-											<p className="explorer-help-title">Commands</p>
-											<p className="explorer-help-line">
-												Hold <kbd>Ctrl</kbd> and use the scroll wheel to zoom in and out.
-											</p>
+											{isBranchMenuOpen ? (
+												<div className="branch-menu" role="menu" aria-label="Git branches">
+													{activeProject.branches.map((branch) => {
+														const isCurrent = branch === activeProject.currentBranch
+														return (
+															<button
+																key={branch}
+																type="button"
+																className={isCurrent ? 'branch-menu-item branch-menu-item-current' : 'branch-menu-item'}
+																role="menuitem"
+																disabled={isCurrent || isSwitchingBranch}
+																onClick={() => void handleBranchCheckout(branch)}
+															>
+																<span>{branch}</span>
+																{isCurrent ? <span className="branch-menu-check">current</span> : null}
+															</button>
+														)
+													})}
+												</div>
+											) : null}
 										</div>
 									) : null}
+
+									<div className="explorer-help">
+										<button
+											type="button"
+											className="explorer-help-button"
+											aria-label="Show canvas commands"
+											aria-expanded={isHelpOpen}
+											onClick={() => setIsHelpOpen((value) => !value)}
+										>
+											?
+										</button>
+
+										{isHelpOpen ? (
+											<div className="explorer-help-popover" role="dialog" aria-label="Canvas commands">
+												<p className="explorer-help-title">Commands</p>
+												<p className="explorer-help-line">
+													Hold <kbd>Ctrl</kbd> and use the scroll wheel to zoom in and out.
+												</p>
+											</div>
+										) : null}
+									</div>
 								</div>
 							</div>
+
+							{branchError !== '' ? (
+								<div className="branch-error-popover" role="alert">
+									<p>{branchError}</p>
+									<button
+										type="button"
+										aria-label="Dismiss branch error"
+										onClick={() => setBranchError('')}
+									>
+										×
+									</button>
+								</div>
+							) : null}
 
 							<div className="explorer-tree-panel">
 								{projectState === 'idle' ? (
@@ -1363,18 +1575,18 @@ function App() {
 												name: activeProject.name,
 												path: activeProject.id,
 												kind: 'directory',
-								children: fileTree.children,
-							}}
-							depth={0}
-							expandedPaths={expandedPaths}
-							activeFilename={activeFilename}
-							onToggle={togglePath}
-							onFileOpen={(path) => void handleFileOpen(path)}
-						/>
-					</ul>
-				) : null}
-			</div>
-		</div>
+												children: fileTree.children,
+											}}
+											depth={0}
+											expandedPaths={expandedPaths}
+											activeFilename={activeFilename}
+											onToggle={togglePath}
+											onFileOpen={(path) => void handleFileOpen(path)}
+										/>
+									</ul>
+								) : null}
+							</div>
+						</div>
 
 						<button type="button" className="open-project-button" onClick={openProjectPicker}>
 							{activeProject === null ? 'Open Repo' : 'Switch Repo'}
@@ -1388,14 +1600,14 @@ function App() {
 					className="workspace-canvas"
 					style={{ width: canvasWidth + 'px', height: canvasHeight + 'px', zoom }}
 				>
-				{/*
-					Render in stable insertion order and let each window's CSS `z-index`
-					(set from fileWindow.zIndex below) handle stacking. Sorting the list by
-					zIndex here would reorder the DOM nodes on every focus change, which
-					moves the captured header mid-gesture and breaks the active drag
-					(stuck grab cursor + a leaked auto-scroll rAF loop).
-				*/}
-				{openFiles.map((fileWindow) => {
+					{/*
+						Render in stable insertion order and let each window's CSS z-index
+						(set from fileWindow.zIndex below) handle stacking. Sorting the list by
+						zIndex here would reorder the DOM nodes on every focus change, which
+						moves the captured header mid-gesture and breaks the active drag
+						(stuck grab cursor + a leaked auto-scroll rAF loop).
+					*/}
+					{openFiles.map((fileWindow) => {
 						const isActive = fileWindow.id === activeWindowID
 						return (
 							<section
@@ -1422,6 +1634,12 @@ function App() {
 										<p className="workspace-eyebrow">File error</p>
 										<h2>{fileWindow.filename}</h2>
 										<p>{fileWindow.error}</p>
+									</div>
+								) : fileWindow.state === 'deleted' ? (
+									<div className="workspace-placeholder workspace-placeholder-deleted">
+										<p className="workspace-eyebrow">File unavailable</p>
+										<h2>{fileWindow.filename}</h2>
+										<p>(deleted)</p>
 									</div>
 								) : (
 									<>

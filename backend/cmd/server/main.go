@@ -56,7 +56,7 @@ func start(args []string) error {
 
 	server := &http.Server{
 		Addr:    ":" + *port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, checkoutHandler, lspHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -126,6 +126,15 @@ func fileHandler(projectID string, filename string) ([]string, error) {
 	return projects.ReadFileLines(root, projectID, filename)
 }
 
+func checkoutHandler(projectID string, branch string) (projects.Detail, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return projects.Detail{}, err
+	}
+
+	return projects.CheckoutBranch(root, projectID, branch)
+}
+
 // lspDefaultTimeout bounds a single LSP analysis. Cold language server startup
 // and indexing can be slow, so it is generous.
 const lspDefaultTimeout = 90 * time.Second
@@ -156,6 +165,7 @@ func newMux(
 	listProjects func() ([]projects.Project, error),
 	getProject func(string) (projects.Detail, error),
 	readFile func(string, string) ([]string, error),
+	checkoutBranch func(string, string) (projects.Detail, error),
 	analyzeFile func(string, string) (lsp.FileAnalysis, error),
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -187,12 +197,14 @@ func newMux(
 			writeProjectResponse(w, projectID, getProject)
 		case remainder == "files" && r.Method == http.MethodPost:
 			writeFileResponse(w, r, projectID, readFile)
+		case remainder == "checkout" && r.Method == http.MethodPost:
+			writeCheckoutResponse(w, r, projectID, checkoutBranch)
 		case remainder == "lsp" && r.Method == http.MethodPost:
 			writeLSPResponse(w, r, projectID, analyzeFile)
 		case remainder == "":
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		case remainder == "files", remainder == "lsp":
+		case remainder == "files", remainder == "checkout", remainder == "lsp":
 			w.Header().Set("Allow", http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		default:
@@ -251,6 +263,36 @@ func writeFileResponse(
 	writeJSON(w, lines)
 }
 
+func writeCheckoutResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID string,
+	checkoutBranch func(string, string) (projects.Detail, error),
+) {
+	branch, ok := decodeBranchRequest(w, r)
+	if !ok {
+		return
+	}
+
+	detail, err := checkoutBranch(projectID, branch)
+	if err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			http.Error(w, "project not found", http.StatusNotFound)
+		case errors.Is(err, projects.ErrDirtyWorktree):
+			http.Error(w, "please stash or remove uncommitted changes first", http.StatusConflict)
+		case errors.Is(err, projects.ErrUnknownBranch):
+			http.Error(w, "branch not found", http.StatusNotFound)
+		default:
+			log.Printf("failed to checkout branch %s in project %s: %v", branch, projectID, err)
+			http.Error(w, "failed to checkout branch", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	writeJSON(w, detail)
+}
+
 func writeLSPResponse(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -304,6 +346,31 @@ func decodeFilenameRequest(w http.ResponseWriter, r *http.Request) (string, bool
 	}
 
 	return request.Filename, true
+}
+
+func decodeBranchRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+	defer r.Body.Close()
+
+	var request struct {
+		Branch string `json:"branch"`
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return "", false
+	}
+	if err := decoder.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return "", false
+	}
+	if strings.TrimSpace(request.Branch) == "" {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return "", false
+	}
+
+	return request.Branch, true
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

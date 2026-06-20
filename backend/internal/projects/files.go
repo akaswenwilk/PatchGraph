@@ -15,13 +15,17 @@ import (
 var (
 	ErrInvalidFilePath    = errors.New("invalid file path")
 	ErrFileOutsideProject = errors.New("file path escapes project root")
+	ErrDirtyWorktree      = errors.New("worktree has uncommitted changes")
+	ErrUnknownBranch      = errors.New("unknown branch")
 )
 
 type Detail struct {
-	ID    string   `json:"id"`
-	Name  string   `json:"name"`
-	Path  string   `json:"path"`
-	Files []string `json:"files"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Path          string   `json:"path"`
+	CurrentBranch string   `json:"currentBranch"`
+	Branches      []string `json:"branches"`
+	Files         []string `json:"files"`
 }
 
 func Get(root, id string) (Detail, error) {
@@ -34,13 +38,57 @@ func Get(root, id string) (Detail, error) {
 	if err != nil {
 		return Detail{}, err
 	}
+	branches, err := ListBranches(project)
+	if err != nil {
+		return Detail{}, err
+	}
+	currentBranch, err := CurrentBranch(project)
+	if err != nil {
+		return Detail{}, err
+	}
 
 	return Detail{
-		ID:    project.ID,
-		Name:  project.Name,
-		Path:  project.Path,
-		Files: files,
+		ID:            project.ID,
+		Name:          project.Name,
+		Path:          project.Path,
+		CurrentBranch: currentBranch,
+		Branches:      branches,
+		Files:         files,
 	}, nil
+}
+
+func CheckoutBranch(root, projectID, branch string) (Detail, error) {
+	project, err := FindByID(root, projectID)
+	if err != nil {
+		return Detail{}, err
+	}
+
+	cleanBranch := strings.TrimSpace(branch)
+	if cleanBranch == "" {
+		return Detail{}, ErrUnknownBranch
+	}
+
+	branches, err := ListBranches(project)
+	if err != nil {
+		return Detail{}, err
+	}
+	if !slices.Contains(branches, cleanBranch) {
+		return Detail{}, ErrUnknownBranch
+	}
+
+	dirty, err := HasUncommittedChanges(project)
+	if err != nil {
+		return Detail{}, err
+	}
+	if dirty {
+		return Detail{}, ErrDirtyWorktree
+	}
+
+	if _, err := gitOutput(project, "checkout", "--quiet", cleanBranch); err != nil {
+		return Detail{}, err
+	}
+
+	return Get(root, projectID)
 }
 
 func ReadFileLines(root, projectID, filename string) ([]string, error) {
@@ -91,20 +139,14 @@ func ListFiles(project Project) ([]string, error) {
 	// Mark the directory safe per-invocation with -c rather than mutating the
 	// global git config. The latter races on the global config lock when
 	// projects are listed concurrently ("could not lock config file").
-	command := exec.Command(
-		"git",
-		"-c",
-		"safe.directory="+project.AbsolutePath(),
-		"-C",
-		project.AbsolutePath(),
+	output, err := gitOutput(
+		project,
 		"ls-files",
 		"--cached",
 		"--others",
 		"--exclude-standard",
 		"-z",
 	)
-
-	output, err := command.Output()
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +168,49 @@ func ListFiles(project Project) ([]string, error) {
 
 	slices.Sort(files)
 	return files, nil
+}
+
+func CurrentBranch(project Project) (string, error) {
+	output, err := gitOutput(project, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+func ListBranches(project Project) ([]string, error) {
+	output, err := gitOutput(project, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+
+	branches := strings.Fields(string(output))
+	slices.Sort(branches)
+	return branches, nil
+}
+
+func HasUncommittedChanges(project Project) (bool, error) {
+	output, err := gitOutput(project, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+
+	return strings.TrimSpace(string(output)) != "", nil
+}
+
+func gitOutput(project Project, args ...string) ([]byte, error) {
+	command := exec.Command(
+		"git",
+		append([]string{
+			"-c",
+			"safe.directory=" + project.AbsolutePath(),
+			"-C",
+			project.AbsolutePath(),
+		}, args...)...,
+	)
+
+	return command.Output()
 }
 
 func normalizeRelativeFilePath(filename string) (string, error) {

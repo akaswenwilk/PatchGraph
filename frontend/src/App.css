@@ -153,6 +153,160 @@
 	gap: 12px;
 }
 
+.explorer-actions {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+.branch-picker {
+	position: relative;
+	max-width: 132px;
+}
+
+.branch-button {
+	max-width: 132px;
+	min-height: 28px;
+	padding: 0 9px;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.06);
+	color: #f5f7fb;
+	font: inherit;
+	font-size: 0.78rem;
+	font-weight: 650;
+	line-height: 1;
+	cursor: pointer;
+	transition:
+		background 140ms ease,
+		transform 140ms ease;
+}
+
+.branch-button:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.14);
+}
+
+.branch-button:active:not(:disabled) {
+	transform: scale(0.97);
+}
+
+.branch-button:disabled {
+	cursor: progress;
+	opacity: 0.68;
+}
+
+.branch-button-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.branch-menu {
+	position: absolute;
+	top: calc(100% + 10px);
+	right: 0;
+	z-index: 24;
+	width: 220px;
+	max-height: 280px;
+	padding: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	overflow-y: auto;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	border-radius: 16px;
+	background:
+		linear-gradient(180deg, rgba(32, 35, 42, 0.98), rgba(22, 24, 30, 0.96)),
+		rgba(22, 24, 30, 0.96);
+	box-shadow: 0 18px 40px rgba(0, 0, 0, 0.4);
+	backdrop-filter: blur(18px);
+}
+
+.branch-menu-item {
+	min-height: 34px;
+	padding: 8px 10px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	border: 0;
+	border-radius: 10px;
+	background: transparent;
+	color: rgba(245, 247, 251, 0.92);
+	font: inherit;
+	font-size: 0.86rem;
+	text-align: left;
+	cursor: pointer;
+}
+
+.branch-menu-item span:first-child {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.branch-menu-item:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.1);
+}
+
+.branch-menu-item-current {
+	background: rgba(124, 172, 255, 0.16);
+	color: #f5f7fb;
+}
+
+.branch-menu-item:disabled {
+	cursor: default;
+}
+
+.branch-menu-check {
+	flex-shrink: 0;
+	color: rgba(141, 210, 182, 0.86);
+	font-size: 0.72rem;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.branch-error-popover {
+	position: relative;
+	margin-top: -6px;
+	padding: 10px 12px;
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	border: 1px solid rgba(255, 147, 147, 0.32);
+	border-radius: 14px;
+	background: rgba(84, 29, 34, 0.72);
+	box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
+.branch-error-popover p {
+	margin: 0;
+	color: #ffd2d2;
+	font-size: 0.86rem;
+	line-height: 1.35;
+}
+
+.branch-error-popover button {
+	margin-left: auto;
+	padding: 0;
+	width: 20px;
+	height: 20px;
+	flex-shrink: 0;
+	border: 0;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.1);
+	color: #ffe1e1;
+	font: inherit;
+	line-height: 1;
+	cursor: pointer;
+}
+
 .explorer-help {
 	position: relative;
 	flex-shrink: 0;
@@ -464,6 +618,11 @@
 
 .workspace-placeholder-error p:last-child {
 	color: #ffb3b3;
+}
+
+.workspace-placeholder-deleted p:last-child {
+	color: rgba(232, 238, 248, 0.58);
+	font-style: italic;
 }
 
 .workspace-eyebrow {
