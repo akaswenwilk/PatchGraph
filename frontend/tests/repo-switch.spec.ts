@@ -75,6 +75,46 @@ test('switching branches reloads the tree and open file windows', async ({ page 
 	)
 })
 
+test('the branch button is fully visible inside the sidebar', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+
+	const sidebar = page.getByRole('complementary', { name: 'Sidebar' })
+	const branchButton = page.getByRole('button', { name: 'Switch git branch' })
+	await expect(branchButton).toBeVisible()
+
+	const sidebarBox = await sidebar.boundingBox()
+	const buttonBox = await branchButton.boundingBox()
+	if (sidebarBox === null || buttonBox === null) {
+		throw new Error('Expected sidebar and branch button bounding boxes')
+	}
+
+	// The whole pill must sit within the sidebar's padded bounds — not clipped by
+	// the sidebar's overflow:hidden edge.
+	expect(buttonBox.x).toBeGreaterThanOrEqual(sidebarBox.x)
+	expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(sidebarBox.x + sidebarBox.width + 0.5)
+
+	// The branch name label is rendered, not collapsed to zero width.
+	const label = branchButton.locator('.branch-button-label')
+	const labelBox = await label.boundingBox()
+	if (labelBox === null) {
+		throw new Error('Expected branch label bounding box')
+	}
+	expect(labelBox.width).toBeGreaterThan(20)
+
+	// Opening the menu keeps it within the sidebar too.
+	await branchButton.click()
+	const menu = page.getByRole('menu', { name: 'Git branches' })
+	await expect(menu).toBeVisible()
+	const menuBox = await menu.boundingBox()
+	if (menuBox === null) {
+		throw new Error('Expected branch menu bounding box')
+	}
+	expect(menuBox.x).toBeGreaterThanOrEqual(sidebarBox.x)
+	expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(sidebarBox.x + sidebarBox.width + 0.5)
+})
+
 test('switching branches with uncommitted changes shows a blocking error', async ({ page }) => {
 	await page.goto('/')
 

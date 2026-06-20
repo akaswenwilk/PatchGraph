@@ -146,6 +146,22 @@ function MenuIcon() {
 	)
 }
 
+function BranchIcon() {
+	return (
+		<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+			<circle cx="4" cy="3.5" r="1.6" stroke="currentColor" strokeWidth="1.4" />
+			<circle cx="4" cy="12.5" r="1.6" stroke="currentColor" strokeWidth="1.4" />
+			<circle cx="12" cy="4.5" r="1.6" stroke="currentColor" strokeWidth="1.4" />
+			<path
+				d="M4 5.1v5.8M4 9c0-2.4 1.4-3.6 3.4-4 1.6-.32 2.4-1.1 2.6-2.4"
+				stroke="currentColor"
+				strokeWidth="1.4"
+				strokeLinecap="round"
+			/>
+		</svg>
+	)
+}
+
 function FolderIcon({ isOpen }: { isOpen: boolean }) {
 	return <span className={isOpen ? 'tree-icon tree-icon-open' : 'tree-icon'}>{isOpen ? '▾' : '▸'}</span>
 }
@@ -1471,7 +1487,7 @@ function App() {
 					<>
 						<div className="sidebar-content">
 							<div className="explorer-panel-header">
-								<div>
+								<div className="explorer-heading">
 									<p className="explorer-eyebrow">Explorer</p>
 									<h1>{activeProject?.name ?? 'No repo opened'}</h1>
 									<p className="explorer-subtitle">
@@ -1480,46 +1496,6 @@ function App() {
 								</div>
 
 								<div className="explorer-actions">
-									{activeProject !== null ? (
-										<div className="branch-picker">
-											<button
-												type="button"
-												className="branch-button"
-												aria-label="Switch git branch"
-												aria-expanded={isBranchMenuOpen}
-												disabled={isSwitchingBranch}
-												onClick={() => {
-													setBranchError('')
-													setIsBranchMenuOpen((value) => !value)
-												}}
-											>
-												<span className="branch-button-label">{activeProject.currentBranch}</span>
-												<span aria-hidden="true">▾</span>
-											</button>
-
-											{isBranchMenuOpen ? (
-												<div className="branch-menu" role="menu" aria-label="Git branches">
-													{activeProject.branches.map((branch) => {
-														const isCurrent = branch === activeProject.currentBranch
-														return (
-															<button
-																key={branch}
-																type="button"
-																className={isCurrent ? 'branch-menu-item branch-menu-item-current' : 'branch-menu-item'}
-																role="menuitem"
-																disabled={isCurrent || isSwitchingBranch}
-																onClick={() => void handleBranchCheckout(branch)}
-															>
-																<span>{branch}</span>
-																{isCurrent ? <span className="branch-menu-check">current</span> : null}
-															</button>
-														)
-													})}
-												</div>
-											) : null}
-										</div>
-									) : null}
-
 									<div className="explorer-help">
 										<button
 											type="button"
@@ -1542,6 +1518,51 @@ function App() {
 									</div>
 								</div>
 							</div>
+
+							{activeProject !== null ? (
+								<div className="branch-bar">
+									<div className="branch-picker">
+										<button
+											type="button"
+											className="branch-button"
+											aria-label="Switch git branch"
+											aria-expanded={isBranchMenuOpen}
+											disabled={isSwitchingBranch}
+											onClick={() => {
+												setBranchError('')
+												setIsBranchMenuOpen((value) => !value)
+											}}
+										>
+											<span className="branch-button-icon" aria-hidden="true">
+												<BranchIcon />
+											</span>
+											<span className="branch-button-label">{activeProject.currentBranch}</span>
+											<span className="branch-button-caret" aria-hidden="true">▾</span>
+										</button>
+
+										{isBranchMenuOpen ? (
+											<div className="branch-menu" role="menu" aria-label="Git branches">
+												{activeProject.branches.map((branch) => {
+													const isCurrent = branch === activeProject.currentBranch
+													return (
+														<button
+															key={branch}
+															type="button"
+															className={isCurrent ? 'branch-menu-item branch-menu-item-current' : 'branch-menu-item'}
+															role="menuitem"
+															disabled={isCurrent || isSwitchingBranch}
+															onClick={() => void handleBranchCheckout(branch)}
+														>
+															<span>{branch}</span>
+															{isCurrent ? <span className="branch-menu-check">current</span> : null}
+														</button>
+													)
+												})}
+											</div>
+										) : null}
+									</div>
+								</div>
+							) : null}
 
 							{branchError !== '' ? (
 								<div className="branch-error-popover" role="alert">

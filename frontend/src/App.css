@@ -153,6 +153,15 @@
 	gap: 12px;
 }
 
+.explorer-heading {
+	min-width: 0;
+}
+
+.explorer-heading h1 {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 .explorer-actions {
 	display: flex;
 	align-items: flex-start;
@@ -160,30 +169,53 @@
 	flex-shrink: 0;
 }
 
+.branch-bar {
+	margin-top: -6px;
+}
+
 .branch-picker {
 	position: relative;
-	max-width: 132px;
+	width: 100%;
 }
 
 .branch-button {
-	max-width: 132px;
-	min-height: 28px;
-	padding: 0 9px;
-	display: inline-flex;
+	width: 100%;
+	min-height: 32px;
+	padding: 0 12px;
+	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 8px;
 	border: 1px solid rgba(255, 255, 255, 0.14);
 	border-radius: 999px;
 	background: rgba(255, 255, 255, 0.06);
 	color: #f5f7fb;
 	font: inherit;
-	font-size: 0.78rem;
+	font-size: 0.8rem;
 	font-weight: 650;
 	line-height: 1;
 	cursor: pointer;
 	transition:
 		background 140ms ease,
+		border-color 140ms ease,
 		transform 140ms ease;
+}
+
+.branch-button-icon {
+	display: inline-flex;
+	flex-shrink: 0;
+	color: rgba(185, 198, 222, 0.85);
+}
+
+.branch-button-caret {
+	margin-left: auto;
+	flex-shrink: 0;
+	font-size: 0.7rem;
+	color: rgba(185, 198, 222, 0.75);
+}
+
+.branch-button[aria-expanded='true'] {
+	border-color: rgba(124, 172, 255, 0.45);
+	background: rgba(124, 172, 255, 0.12);
 }
 
 .branch-button:hover:not(:disabled) {
@@ -208,10 +240,10 @@
 
 .branch-menu {
 	position: absolute;
-	top: calc(100% + 10px);
+	top: calc(100% + 8px);
+	left: 0;
 	right: 0;
 	z-index: 24;
-	width: 220px;
 	max-height: 280px;
 	padding: 8px;
 	display: flex;
