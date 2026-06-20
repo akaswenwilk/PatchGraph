@@ -104,8 +104,19 @@ test('the git flyout reveals a fully visible branch picker', async ({ page }) =>
 	expect(gitButtonBox.x + gitButtonBox.width).toBeLessThanOrEqual(sidebarBox.x + sidebarBox.width + 0.5)
 	expect(gitButtonBox.x).toBeGreaterThan(sidebarBox.x + sidebarBox.width / 2)
 
-	// Opening the flyout reveals the branch button, fully visible inside the viewport.
+	// Opening the flyout reveals the Git dialog, and it sits to the right of the
+	// file explorer rather than being clipped inside it.
 	await gitButton.click()
+	const flyout = page.getByRole('dialog', { name: 'Git' })
+	await expect(flyout).toBeVisible()
+
+	const flyoutBox = await flyout.boundingBox()
+	if (flyoutBox === null) {
+		throw new Error('Expected git flyout bounding box')
+	}
+	// Left edge of the flyout starts at or past the sidebar's right edge.
+	expect(flyoutBox.x).toBeGreaterThanOrEqual(sidebarBox.x + sidebarBox.width - 0.5)
+
 	const branchButton = page.getByRole('button', { name: 'Switch git branch' })
 	await expect(branchButton).toBeVisible()
 
