@@ -48,10 +48,18 @@ type Range struct {
 // Location identifies a range within a document. URI is the raw LSP file URI;
 // Path is the project-relative path when the location falls inside the project,
 // otherwise the absolute path (e.g. for standard library or dependency files).
+//
+// DefRange, when set, is the full extent (first through last line) of the
+// declaration this location points at — e.g. a whole function/method/type body,
+// not just its name. It is populated only for in-repo definition locations that
+// resolve to a document symbol, so the UI can open just the definition's lines
+// instead of the entire file. It is nil for things that aren't document symbols
+// (local variables, parameters) and for references/implementations.
 type Location struct {
-	URI   string `json:"uri"`
-	Path  string `json:"path"`
-	Range Range  `json:"range"`
+	URI      string `json:"uri"`
+	Path     string `json:"path"`
+	Range    Range  `json:"range"`
+	DefRange *Range `json:"defRange,omitempty"`
 }
 
 // SymbolInfo describes a single symbol referenced in the analyzed file along
@@ -139,6 +147,9 @@ func Analyze(ctx context.Context, root, absFile, languageID string, command []st
 	}); err != nil {
 		return FileAnalysis{}, fmt.Errorf("didOpen: %w", err)
 	}
+	c.docMu.Lock()
+	c.openedDocs[uri] = true
+	c.docMu.Unlock()
 
 	// Prefer semantic tokens (covers every identifier, including cross-file
 	// symbols); fall back to document symbols if the server has no token legend.
@@ -222,7 +233,7 @@ func (c *client) analyzeViaSemanticTokens(
 			Name:            identifierText(lines, token),
 			Kind:            kindFromTokenType(token.Type),
 			Position:        pos,
-			Definitions:     keepInRepo(fillPaths(root, definitions)),
+			Definitions:     c.attachDefinitionRanges(ctx, root, keepInRepo(fillPaths(root, definitions))),
 			References:      keepInRepo(fillPaths(root, c.references(ctx, uri, pos))),
 			Implementations: keepInRepo(fillPaths(root, implementations)),
 			Occurrences:     []Range{occurrence},
@@ -252,7 +263,7 @@ func (c *client) analyzeViaDocumentSymbols(ctx context.Context, root, uri string
 			Name:            sym.Name,
 			Kind:            symbolKindName(sym.Kind),
 			Position:        pos,
-			Definitions:     keepInRepo(fillPaths(root, c.locations(ctx, "textDocument/definition", uri, pos))),
+			Definitions:     c.attachDefinitionRanges(ctx, root, keepInRepo(fillPaths(root, c.locations(ctx, "textDocument/definition", uri, pos)))),
 			References:      keepInRepo(fillPaths(root, c.references(ctx, uri, pos))),
 			Implementations: keepInRepo(fillPaths(root, c.locations(ctx, "textDocument/implementation", uri, pos))),
 			Occurrences: []Range{{
@@ -276,6 +287,15 @@ type client struct {
 	mu      sync.Mutex
 	nextID  int64
 	pending map[int]chan rpcResponse
+
+	// Caches for definition-range enrichment, populated lazily as target files
+	// are inspected. Analysis drives these sequentially, but docMu guards them
+	// so the maps are safe regardless. openedDocs records which document URIs
+	// have been didOpen'd; symbolRanges caches each file's document symbols with
+	// their full and selection ranges.
+	docMu        sync.Mutex
+	openedDocs   map[string]bool
+	symbolRanges map[string][]rangedSymbol
 
 	done chan struct{}
 }
@@ -342,11 +362,13 @@ func startClient(ctx context.Context, command []string, root string) (*client, e
 	}
 
 	c := &client{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  bufio.NewReader(stdout),
-		pending: make(map[int]chan rpcResponse),
-		done:    make(chan struct{}),
+		cmd:          cmd,
+		stdin:        stdin,
+		stdout:       bufio.NewReader(stdout),
+		pending:      make(map[int]chan rpcResponse),
+		openedDocs:   make(map[string]bool),
+		symbolRanges: make(map[string][]rangedSymbol),
+		done:         make(chan struct{}),
 	}
 	go c.readLoop()
 	return c, nil
@@ -591,6 +613,199 @@ func (c *client) documentSymbols(ctx context.Context, uri string) ([]flatSymbol,
 	var out []flatSymbol
 	flattenSymbols(symbols, &out)
 	return out, nil
+}
+
+// rangedSymbol is a flattened document symbol that keeps the full range (the
+// whole declaration, including its body) and the selection range (just the
+// name), used to map a definition position to the lines its declaration spans.
+type rangedSymbol struct {
+	Kind           int
+	Range          Range
+	SelectionRange Range
+}
+
+// definitionRangeKinds are the document-symbol kinds whose full range we treat
+// as "the definition" worth opening on its own: functions, methods, types, and
+// classes. Other kinds (variables, constants, fields, parameters) either aren't
+// reported as document symbols or are single-line, so callers fall back to the
+// definition's own line.
+var definitionRangeKinds = map[int]bool{
+	5:  true, // Class
+	6:  true, // Method
+	9:  true, // Constructor
+	10: true, // Enum
+	11: true, // Interface
+	12: true, // Function
+	23: true, // Struct
+}
+
+// attachDefinitionRanges fills DefRange on each in-repo definition location with
+// the full extent of the document symbol it points at, when that symbol is a
+// function/method/type/class. Locations that don't resolve to such a symbol are
+// left with a nil DefRange. The input slice is mutated and returned.
+func (c *client) attachDefinitionRanges(ctx context.Context, root string, definitions []Location) []Location {
+	for i := range definitions {
+		if r := c.definitionRange(ctx, root, definitions[i]); r != nil {
+			definitions[i].DefRange = r
+		}
+	}
+	return definitions
+}
+
+// definitionRange resolves the full line span of the declaration a definition
+// location points at, or nil when the target isn't a qualifying document symbol
+// (or can't be inspected). It opens the target file in the server as needed and
+// caches its document symbols.
+func (c *client) definitionRange(ctx context.Context, root string, def Location) *Range {
+	// Only in-repo targets are openable; out-of-repo paths are absolute.
+	if filepath.IsAbs(def.Path) {
+		return nil
+	}
+	abs := filepath.Join(root, def.Path)
+	if _, _, ok := LanguageForFile(abs); !ok {
+		return nil
+	}
+	uri := pathToURI(abs)
+	if err := c.openDocument(abs, uri); err != nil {
+		return nil
+	}
+	symbols, err := c.documentSymbolsRanged(ctx, uri)
+	if err != nil {
+		return nil
+	}
+	return selectDefinitionRange(symbols, def.Range.Start)
+}
+
+// selectDefinitionRange returns the full range of the smallest qualifying
+// document symbol whose name (selection range) covers pos, so a method is
+// preferred over its enclosing type. Returns nil when nothing qualifies.
+func selectDefinitionRange(symbols []rangedSymbol, pos Position) *Range {
+	var best *rangedSymbol
+	for i := range symbols {
+		sym := symbols[i]
+		if !definitionRangeKinds[sym.Kind] || !rangeContains(sym.SelectionRange, pos) {
+			continue
+		}
+		if best == nil || rangeShorter(sym.Range, best.Range) {
+			best = &symbols[i]
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	span := best.Range
+	return &span
+}
+
+// openDocument sends textDocument/didOpen for a target file if it hasn't been
+// opened yet on this client, reading the file's current contents from disk.
+func (c *client) openDocument(abs, uri string) error {
+	c.docMu.Lock()
+	already := c.openedDocs[uri]
+	c.docMu.Unlock()
+	if already {
+		return nil
+	}
+
+	content, err := os.ReadFile(abs)
+	if err != nil {
+		return err
+	}
+	_, languageID, ok := LanguageForFile(abs)
+	if !ok {
+		return ErrUnsupportedLanguage
+	}
+	if err := c.notify("textDocument/didOpen", map[string]any{
+		"textDocument": map[string]any{
+			"uri":        uri,
+			"languageId": languageID,
+			"version":    1,
+			"text":       string(content),
+		},
+	}); err != nil {
+		return err
+	}
+
+	c.docMu.Lock()
+	c.openedDocs[uri] = true
+	c.docMu.Unlock()
+	return nil
+}
+
+// documentSymbolsRanged returns a file's document symbols flattened with their
+// full and selection ranges, cached per URI for the lifetime of the client.
+func (c *client) documentSymbolsRanged(ctx context.Context, uri string) ([]rangedSymbol, error) {
+	c.docMu.Lock()
+	if cached, ok := c.symbolRanges[uri]; ok {
+		c.docMu.Unlock()
+		return cached, nil
+	}
+	c.docMu.Unlock()
+
+	raw, err := c.call(ctx, "textDocument/documentSymbol", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var symbols []documentSymbol
+	if err := json.Unmarshal(raw, &symbols); err != nil {
+		return nil, err
+	}
+	var out []rangedSymbol
+	flattenRanged(symbols, &out)
+
+	c.docMu.Lock()
+	c.symbolRanges[uri] = out
+	c.docMu.Unlock()
+	return out, nil
+}
+
+// flattenRanged flattens the (possibly hierarchical) document-symbol tree into a
+// list that preserves each symbol's kind and ranges. SymbolInformation-shaped
+// results (no selectionRange, a location instead) are mapped onto both ranges.
+func flattenRanged(symbols []documentSymbol, out *[]rangedSymbol) {
+	for _, sym := range symbols {
+		full := sym.Range
+		selection := sym.SelectionRange
+		if full == (Range{}) && sym.Location != nil {
+			full = sym.Location.Range
+		}
+		if selection == (Range{}) {
+			if sym.Location != nil {
+				selection = sym.Location.Range
+			} else {
+				selection = full
+			}
+		}
+		*out = append(*out, rangedSymbol{Kind: sym.Kind, Range: full, SelectionRange: selection})
+		flattenRanged(sym.Children, out)
+	}
+}
+
+// rangeContains reports whether pos lies within r (inclusive of both ends).
+func rangeContains(r Range, pos Position) bool {
+	if pos.Line < r.Start.Line || pos.Line > r.End.Line {
+		return false
+	}
+	if pos.Line == r.Start.Line && pos.Character < r.Start.Character {
+		return false
+	}
+	if pos.Line == r.End.Line && pos.Character > r.End.Character {
+		return false
+	}
+	return true
+}
+
+// rangeShorter reports whether a spans fewer lines than b, breaking ties by the
+// starting line so the most specific (innermost) symbol wins.
+func rangeShorter(a, b Range) bool {
+	aLines := a.End.Line - a.Start.Line
+	bLines := b.End.Line - b.Start.Line
+	if aLines != bLines {
+		return aLines < bLines
+	}
+	return a.Start.Line > b.Start.Line
 }
 
 func (c *client) locations(ctx context.Context, method, uri string, pos Position) []Location {

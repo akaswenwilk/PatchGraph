@@ -3,7 +3,12 @@ import type { HighlightedToken } from './highlight'
 // Mirrors the backend POST /api/projects/{id}/lsp response shape.
 export type LspPosition = { line: number; character: number }
 export type LspRange = { start: LspPosition; end: LspPosition }
-export type LspLocation = { uri: string; path: string; range: LspRange }
+// defRange, when present, is the full line span of the declaration this location
+// points at (e.g. a whole function body), so a definition can be opened showing
+// just its lines. Set only on in-repo definition locations that resolve to a
+// document symbol; absent for local variables/parameters and for
+// references/implementations.
+export type LspLocation = { uri: string; path: string; range: LspRange; defRange?: LspRange }
 export type LspSymbol = {
 	name: string
 	kind: string
@@ -40,7 +45,9 @@ function isLocation(value: unknown): value is LspLocation {
 		typeof range === 'object' &&
 		range !== null &&
 		isPosition(range.start) &&
-		isPosition(range.end)
+		isPosition(range.end) &&
+		// defRange is optional, but must be a valid range when present.
+		(candidate.defRange === undefined || isRange(candidate.defRange))
 	)
 }
 
