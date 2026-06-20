@@ -473,6 +473,7 @@ function App() {
 	const [projectState, setProjectState] = useState<LoadState>('idle')
 	const [projectError, setProjectError] = useState('')
 	const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null)
+	const [isGitMenuOpen, setIsGitMenuOpen] = useState(false)
 	const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false)
 	const [isSwitchingBranch, setIsSwitchingBranch] = useState(false)
 	const [branchError, setBranchError] = useState('')
@@ -575,6 +576,35 @@ function App() {
 			window.removeEventListener('keydown', handleKeyDown)
 		}
 	}, [isBranchMenuOpen])
+
+	// Dismiss the git menu (and its branch submenu) on Escape or a click outside it.
+	useEffect(() => {
+		if (!isGitMenuOpen) {
+			return
+		}
+
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target as HTMLElement
+			if (target.closest('.git-menu') === null) {
+				setIsGitMenuOpen(false)
+				setIsBranchMenuOpen(false)
+			}
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setIsGitMenuOpen(false)
+				setIsBranchMenuOpen(false)
+			}
+		}
+
+		window.addEventListener('pointerdown', handlePointerDown)
+		window.addEventListener('keydown', handleKeyDown)
+		return () => {
+			window.removeEventListener('pointerdown', handlePointerDown)
+			window.removeEventListener('keydown', handleKeyDown)
+		}
+	}, [isGitMenuOpen])
 
 	// Dismiss the help popover on Escape or a click outside it.
 	useEffect(() => {
@@ -851,12 +881,14 @@ function App() {
 			setExpandedPaths(new Set([project.id]))
 			setProjectState('ready')
 			setIsModalOpen(false)
+			setIsGitMenuOpen(false)
 			setIsBranchMenuOpen(false)
 			setBranchError('')
 		} catch (error) {
 			setActiveProject(null)
 			setFileTree(null)
 			setExpandedPaths(new Set())
+			setIsGitMenuOpen(false)
 			setIsBranchMenuOpen(false)
 			setBranchError('')
 			setProjectState('error')
@@ -1014,6 +1046,7 @@ function App() {
 			setFileTree(buildTree(project.files))
 			setExpandedPaths((current) => new Set([...current, project.id]))
 			setIsBranchMenuOpen(false)
+			setIsGitMenuOpen(false)
 			setOpenBubble(null)
 
 			const windowsToReload = openFiles
@@ -1496,6 +1529,90 @@ function App() {
 								</div>
 
 								<div className="explorer-actions">
+									{activeProject !== null ? (
+										<div className="git-menu">
+											<button
+												type="button"
+												className="git-menu-button"
+												aria-label="Open git menu"
+												aria-expanded={isGitMenuOpen}
+												onClick={() => {
+													setBranchError('')
+													setIsBranchMenuOpen(false)
+													setIsGitMenuOpen((value) => !value)
+												}}
+											>
+												<span className="git-menu-button-icon" aria-hidden="true">
+													<BranchIcon />
+												</span>
+												<span className="git-menu-button-label">Git</span>
+											</button>
+
+											{isGitMenuOpen ? (
+												<div className="git-menu-popover" role="dialog" aria-label="Git">
+													<p className="git-menu-title">Git</p>
+
+													<div className="git-menu-field">
+														<span className="git-menu-field-label">Branch</span>
+														<div className="branch-picker">
+															<button
+																type="button"
+																className="branch-button"
+																aria-label="Switch git branch"
+																aria-expanded={isBranchMenuOpen}
+																disabled={isSwitchingBranch}
+																onClick={() => {
+																	setBranchError('')
+																	setIsBranchMenuOpen((value) => !value)
+																}}
+															>
+																<span className="branch-button-icon" aria-hidden="true">
+																	<BranchIcon />
+																</span>
+																<span className="branch-button-label">{activeProject.currentBranch}</span>
+																<span className="branch-button-caret" aria-hidden="true">▾</span>
+															</button>
+
+															{isBranchMenuOpen ? (
+																<div className="branch-menu" role="menu" aria-label="Git branches">
+																	{activeProject.branches.map((branch) => {
+																		const isCurrent = branch === activeProject.currentBranch
+																		return (
+																			<button
+																				key={branch}
+																				type="button"
+																				className={isCurrent ? 'branch-menu-item branch-menu-item-current' : 'branch-menu-item'}
+																				role="menuitem"
+																				disabled={isCurrent || isSwitchingBranch}
+																				onClick={() => void handleBranchCheckout(branch)}
+																			>
+																				<span>{branch}</span>
+																				{isCurrent ? <span className="branch-menu-check">current</span> : null}
+																			</button>
+																		)
+																	})}
+																</div>
+															) : null}
+														</div>
+													</div>
+
+													{branchError !== '' ? (
+														<div className="branch-error-popover" role="alert">
+															<p>{branchError}</p>
+															<button
+																type="button"
+																aria-label="Dismiss branch error"
+																onClick={() => setBranchError('')}
+															>
+																×
+															</button>
+														</div>
+													) : null}
+												</div>
+											) : null}
+										</div>
+									) : null}
+
 									<div className="explorer-help">
 										<button
 											type="button"
@@ -1518,64 +1635,6 @@ function App() {
 									</div>
 								</div>
 							</div>
-
-							{activeProject !== null ? (
-								<div className="branch-bar">
-									<div className="branch-picker">
-										<button
-											type="button"
-											className="branch-button"
-											aria-label="Switch git branch"
-											aria-expanded={isBranchMenuOpen}
-											disabled={isSwitchingBranch}
-											onClick={() => {
-												setBranchError('')
-												setIsBranchMenuOpen((value) => !value)
-											}}
-										>
-											<span className="branch-button-icon" aria-hidden="true">
-												<BranchIcon />
-											</span>
-											<span className="branch-button-label">{activeProject.currentBranch}</span>
-											<span className="branch-button-caret" aria-hidden="true">▾</span>
-										</button>
-
-										{isBranchMenuOpen ? (
-											<div className="branch-menu" role="menu" aria-label="Git branches">
-												{activeProject.branches.map((branch) => {
-													const isCurrent = branch === activeProject.currentBranch
-													return (
-														<button
-															key={branch}
-															type="button"
-															className={isCurrent ? 'branch-menu-item branch-menu-item-current' : 'branch-menu-item'}
-															role="menuitem"
-															disabled={isCurrent || isSwitchingBranch}
-															onClick={() => void handleBranchCheckout(branch)}
-														>
-															<span>{branch}</span>
-															{isCurrent ? <span className="branch-menu-check">current</span> : null}
-														</button>
-													)
-												})}
-											</div>
-										) : null}
-									</div>
-								</div>
-							) : null}
-
-							{branchError !== '' ? (
-								<div className="branch-error-popover" role="alert">
-									<p>{branchError}</p>
-									<button
-										type="button"
-										aria-label="Dismiss branch error"
-										onClick={() => setBranchError('')}
-									>
-										×
-									</button>
-								</div>
-							) : null}
 
 							<div className="explorer-tree-panel">
 								{projectState === 'idle' ? (

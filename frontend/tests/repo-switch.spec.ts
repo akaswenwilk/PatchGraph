@@ -9,6 +9,13 @@ async function openProject(page: Page, projectName: RegExp): Promise<Locator> {
 	return projectDialog
 }
 
+// The branch picker lives inside the "Git" flyout in the explorer's top-right
+// corner; open it before reaching for the branch button.
+async function openGitMenu(page: Page): Promise<void> {
+	await page.getByRole('button', { name: 'Open git menu' }).click()
+	await expect(page.getByRole('dialog', { name: 'Git' })).toBeVisible()
+}
+
 test('switching repos updates the explorer tree without failing', async ({ page }) => {
 	await page.goto('/')
 
@@ -60,6 +67,7 @@ test('switching branches reloads the tree and open file windows', async ({ page 
 		'delete on feature',
 	)
 
+	await openGitMenu(page)
 	await page.getByRole('button', { name: 'Switch git branch' }).click()
 	await page.getByRole('menuitem', { name: /feature\/delete-file/ }).click()
 
@@ -67,6 +75,7 @@ test('switching branches reloads the tree and open file windows', async ({ page 
 	await expect(viewer).toContainText('(deleted)')
 	await expect(viewer.locator('.code-row')).toHaveCount(0)
 
+	await openGitMenu(page)
 	await page.getByRole('button', { name: 'Switch git branch' }).click()
 	await page.getByRole('menuitem', { name: /master/ }).click()
 
@@ -75,25 +84,38 @@ test('switching branches reloads the tree and open file windows', async ({ page 
 	)
 })
 
-test('the branch button is fully visible inside the sidebar', async ({ page }) => {
+test('the git flyout reveals a fully visible branch picker', async ({ page }) => {
 	await page.goto('/')
 
 	await openProject(page, /PatchGraph\s+PatchGraph$/)
 
 	const sidebar = page.getByRole('complementary', { name: 'Sidebar' })
+	const gitButton = page.getByRole('button', { name: 'Open git menu' })
+	await expect(gitButton).toBeVisible()
+
+	const sidebarBox = await sidebar.boundingBox()
+	const gitButtonBox = await gitButton.boundingBox()
+	if (sidebarBox === null || gitButtonBox === null) {
+		throw new Error('Expected sidebar and git button bounding boxes')
+	}
+
+	// The Git button is pinned to the top-right of the explorer, fully within the
+	// sidebar's padded bounds.
+	expect(gitButtonBox.x + gitButtonBox.width).toBeLessThanOrEqual(sidebarBox.x + sidebarBox.width + 0.5)
+	expect(gitButtonBox.x).toBeGreaterThan(sidebarBox.x + sidebarBox.width / 2)
+
+	// Opening the flyout reveals the branch button, fully visible inside the viewport.
+	await gitButton.click()
 	const branchButton = page.getByRole('button', { name: 'Switch git branch' })
 	await expect(branchButton).toBeVisible()
 
-	const sidebarBox = await sidebar.boundingBox()
+	const viewport = page.viewportSize()
 	const buttonBox = await branchButton.boundingBox()
-	if (sidebarBox === null || buttonBox === null) {
-		throw new Error('Expected sidebar and branch button bounding boxes')
+	if (viewport === null || buttonBox === null) {
+		throw new Error('Expected viewport size and branch button bounding box')
 	}
-
-	// The whole pill must sit within the sidebar's padded bounds — not clipped by
-	// the sidebar's overflow:hidden edge.
-	expect(buttonBox.x).toBeGreaterThanOrEqual(sidebarBox.x)
-	expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(sidebarBox.x + sidebarBox.width + 0.5)
+	expect(buttonBox.x).toBeGreaterThanOrEqual(0)
+	expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(viewport.width + 0.5)
 
 	// The branch name label is rendered, not collapsed to zero width.
 	const label = branchButton.locator('.branch-button-label')
@@ -103,7 +125,7 @@ test('the branch button is fully visible inside the sidebar', async ({ page }) =
 	}
 	expect(labelBox.width).toBeGreaterThan(20)
 
-	// Opening the menu keeps it within the sidebar too.
+	// The branch menu opens and stays within the viewport.
 	await branchButton.click()
 	const menu = page.getByRole('menu', { name: 'Git branches' })
 	await expect(menu).toBeVisible()
@@ -111,8 +133,8 @@ test('the branch button is fully visible inside the sidebar', async ({ page }) =
 	if (menuBox === null) {
 		throw new Error('Expected branch menu bounding box')
 	}
-	expect(menuBox.x).toBeGreaterThanOrEqual(sidebarBox.x)
-	expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(sidebarBox.x + sidebarBox.width + 0.5)
+	expect(menuBox.x).toBeGreaterThanOrEqual(0)
+	expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(viewport.width + 0.5)
 })
 
 test('switching branches with uncommitted changes shows a blocking error', async ({ page }) => {
@@ -120,6 +142,7 @@ test('switching branches with uncommitted changes shows a blocking error', async
 
 	await openProject(page, /PatchGraph-worktree\s+_worktrees\/PatchGraph-worktree$/)
 
+	await openGitMenu(page)
 	await page.getByRole('button', { name: 'Switch git branch' }).click()
 	await page.getByRole('menuitem', { name: /master/ }).click()
 
