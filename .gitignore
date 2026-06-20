@@ -1,1 +1,4 @@
 /backend/server
+/build/
+/backend/internal/web/dist/*
+!/backend/internal/web/dist/placeholder.html
