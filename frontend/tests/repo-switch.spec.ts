@@ -48,6 +48,47 @@ test('selecting a file opens its contents in the viewer', async ({ page }) => {
 	await expect(viewer).toHaveCount(0)
 })
 
+test('switching branches reloads the tree and open file windows', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /delete-me\.txt/ }).click()
+
+	const viewer = page.getByRole('region', { name: 'File viewer for delete-me.txt' })
+	await expect(viewer).toBeVisible()
+	await expect(viewer.locator('.code-row').first().locator('.line-content')).toHaveText(
+		'delete on feature',
+	)
+
+	await page.getByRole('button', { name: 'Switch git branch' }).click()
+	await page.getByRole('menuitem', { name: /feature\/delete-file/ }).click()
+
+	await expect(page.getByRole('button', { name: /feature-only\.txt/ })).toBeVisible()
+	await expect(viewer).toContainText('(deleted)')
+	await expect(viewer.locator('.code-row')).toHaveCount(0)
+
+	await page.getByRole('button', { name: 'Switch git branch' }).click()
+	await page.getByRole('menuitem', { name: /master/ }).click()
+
+	await expect(viewer.locator('.code-row').first().locator('.line-content')).toHaveText(
+		'delete on feature',
+	)
+})
+
+test('switching branches with uncommitted changes shows a blocking error', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph-worktree\s+_worktrees\/PatchGraph-worktree$/)
+
+	await page.getByRole('button', { name: 'Switch git branch' }).click()
+	await page.getByRole('menuitem', { name: /master/ }).click()
+
+	await expect(page.getByRole('alert')).toContainText(
+		'please stash or remove uncommitted changes first',
+	)
+	await expect(page.getByRole('heading', { name: 'PatchGraph-worktree' })).toBeVisible()
+})
+
 test('resizing the file viewer changes its size without changing code text size', async ({
 	page,
 }) => {

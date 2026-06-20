@@ -20,10 +20,17 @@ services:
         git -C "$$repo_root" config user.email "patchgraph-playwright@example.com"
         printf "base\n" > "$$repo_root/base.txt"
         printf "second\n" > "$$repo_root/second.txt"
+        printf "delete on feature\n" > "$$repo_root/delete-me.txt"
         printf "module example.com/sample\n\ngo 1.24\n" > "$$repo_root/go.mod"
         printf "package sample\n\ntype Greeter struct{}\n\nfunc (g Greeter) Greet() string { return \"hi\" }\n\nfunc Use() string { g := Greeter{}; return g.Greet() }\n" > "$$repo_root/lib.go"
-        git -C "$$repo_root" add base.txt second.txt go.mod lib.go
+        git -C "$$repo_root" add base.txt second.txt delete-me.txt go.mod lib.go
         git -C "$$repo_root" commit -qm "base"
+        git -C "$$repo_root" checkout -qb feature/delete-file
+        rm "$$repo_root/delete-me.txt"
+        printf "feature only\n" > "$$repo_root/feature-only.txt"
+        git -C "$$repo_root" add -A
+        git -C "$$repo_root" commit -qm "delete file on feature"
+        git -C "$$repo_root" checkout -q master
         git -C "$$repo_root" branch feature/worktree-switch
         git -C "$$repo_root" worktree add "$$worktree_root" feature/worktree-switch
         printf "worktree\n" > "$$worktree_root/worktree.txt"
