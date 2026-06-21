@@ -35,6 +35,11 @@ type ProjectDetail = {
 	files: string[]
 }
 
+type GitInfo = {
+	current: string
+	branches: string[]
+}
+
 type OpenFile = {
 	id: string
 	filename: string
@@ -120,6 +125,19 @@ function isProjectDetail(value: unknown): value is ProjectDetail {
 		typeof candidate.path === 'string' &&
 		Array.isArray(candidate.files) &&
 		candidate.files.every((entry) => typeof entry === 'string')
+	)
+}
+
+function isGitInfo(value: unknown): value is GitInfo {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		typeof candidate.current === 'string' &&
+		Array.isArray(candidate.branches) &&
+		candidate.branches.every((entry) => typeof entry === 'string')
 	)
 }
 
@@ -436,6 +454,10 @@ function Minimap({
 function App() {
 	const [isCollapsed, setIsCollapsed] = useState(false)
 	const [isModalOpen, setIsModalOpen] = useState(false)
+	const [isGitOpen, setIsGitOpen] = useState(false)
+	const [gitState, setGitState] = useState<LoadState>('idle')
+	const [gitError, setGitError] = useState('')
+	const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
 	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
 	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
@@ -516,6 +538,21 @@ function App() {
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
 	}, [isModalOpen])
+
+	useEffect(() => {
+		if (!isGitOpen) {
+			return
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setIsGitOpen(false)
+			}
+		}
+
+		window.addEventListener('keydown', handleKeyDown)
+		return () => window.removeEventListener('keydown', handleKeyDown)
+	}, [isGitOpen])
 
 	// Dismiss the help popover on Escape or a click outside it.
 	useEffect(() => {
@@ -762,6 +799,36 @@ function App() {
 			setSelectedProjectID(null)
 			setProjectPickerState('error')
 			setProjectPickerError(error instanceof Error ? error.message : 'Unknown error')
+		}
+	}
+
+	async function openGitMenu() {
+		if (activeProject === null) {
+			return
+		}
+
+		setIsGitOpen(true)
+		setGitState('loading')
+		setGitError('')
+		setGitInfo(null)
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/git`)
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			if (!isGitInfo(data)) {
+				throw new Error('Git response was invalid')
+			}
+
+			setGitInfo(data)
+			setGitState('ready')
+		} catch (error) {
+			setGitInfo(null)
+			setGitState('error')
+			setGitError(error instanceof Error ? error.message : 'Unknown error')
 		}
 	}
 
@@ -1379,6 +1446,11 @@ function App() {
 						<button type="button" className="open-project-button" onClick={openProjectPicker}>
 							{activeProject === null ? 'Open Repo' : 'Switch Repo'}
 						</button>
+						{activeProject !== null ? (
+							<button type="button" className="git-button" onClick={() => void openGitMenu()}>
+								Git
+							</button>
+						) : null}
 					</>
 				) : null}
 			</aside>
@@ -1614,6 +1686,99 @@ function App() {
 								onClick={() => void handleProjectOpen()}
 							>
 								Open
+							</button>
+						</div>
+					</section>
+				</div>
+			) : null}
+
+			{isGitOpen ? (
+				<div className="modal-layer" role="presentation">
+					<button
+						type="button"
+						className="modal-backdrop"
+						aria-label="Close git menu"
+						onClick={() => setIsGitOpen(false)}
+					/>
+
+					<section
+						className="git-modal"
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="git-modal-title"
+					>
+						<div className="project-modal-header">
+							<div>
+								<h1 id="git-modal-title">Git</h1>
+								<p>{activeProject?.name ?? ''}</p>
+							</div>
+
+							<button
+								type="button"
+								className="modal-close-button"
+								aria-label="Close git menu"
+								onClick={() => setIsGitOpen(false)}
+							>
+								×
+							</button>
+						</div>
+
+						<div className="git-panel">
+							{gitState === 'loading' ? (
+								<p className="project-status">Loading branches…</p>
+							) : null}
+							{gitState === 'error' ? (
+								<p className="project-status project-status-error">
+									Could not load git info. {gitError}
+								</p>
+							) : null}
+							{gitState === 'ready' && gitInfo !== null ? (
+								<>
+									<div className="git-current">
+										<span className="git-current-label">Current branch</span>
+										<span className="git-current-branch">
+											{gitInfo.current === '' ? 'detached HEAD' : gitInfo.current}
+										</span>
+									</div>
+
+									<div className="git-branches">
+										<p className="git-branches-title">Local branches</p>
+										{gitInfo.branches.length === 0 ? (
+											<p className="project-status">No local branches.</p>
+										) : (
+											<ul className="git-branch-list">
+												{gitInfo.branches.map((branch) => {
+													const isCurrent = branch === gitInfo.current
+													return (
+														<li
+															key={branch}
+															className={
+																isCurrent
+																	? 'git-branch-row git-branch-row-current'
+																	: 'git-branch-row'
+															}
+														>
+															<span className="git-branch-name">{branch}</span>
+															{isCurrent ? (
+																<span className="git-branch-badge">current</span>
+															) : null}
+														</li>
+													)
+												})}
+											</ul>
+										)}
+									</div>
+								</>
+							) : null}
+						</div>
+
+						<div className="project-modal-actions">
+							<button
+								type="button"
+								className="secondary-button"
+								onClick={() => setIsGitOpen(false)}
+							>
+								Close
 							</button>
 						</div>
 					</section>

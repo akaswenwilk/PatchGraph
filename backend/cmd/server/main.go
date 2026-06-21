@@ -56,7 +56,7 @@ func start(args []string) error {
 
 	server := &http.Server{
 		Addr:    ":" + *port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler, gitHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -117,6 +117,15 @@ func projectHandler(projectID string) (projects.Detail, error) {
 	return projects.Get(root, projectID)
 }
 
+func gitHandler(projectID string) (projects.GitInfo, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return projects.GitInfo{}, err
+	}
+
+	return projects.GetGitInfo(root, projectID)
+}
+
 func fileHandler(projectID string, filename string) ([]string, error) {
 	root, err := projects.RootFromEnv()
 	if err != nil {
@@ -157,6 +166,7 @@ func newMux(
 	getProject func(string) (projects.Detail, error),
 	readFile func(string, string) ([]string, error),
 	analyzeFile func(string, string) (lsp.FileAnalysis, error),
+	getGitInfo func(string) (projects.GitInfo, error),
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +199,9 @@ func newMux(
 			writeFileResponse(w, r, projectID, readFile)
 		case remainder == "lsp" && r.Method == http.MethodPost:
 			writeLSPResponse(w, r, projectID, analyzeFile)
-		case remainder == "":
+		case remainder == "git" && r.Method == http.MethodGet:
+			writeGitResponse(w, projectID, getGitInfo)
+		case remainder == "", remainder == "git":
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		case remainder == "files", remainder == "lsp":
@@ -221,6 +233,22 @@ func writeProjectResponse(w http.ResponseWriter, projectID string, getProject fu
 	}
 
 	writeJSON(w, detail)
+}
+
+func writeGitResponse(w http.ResponseWriter, projectID string, getGitInfo func(string) (projects.GitInfo, error)) {
+	info, err := getGitInfo(projectID)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			http.Error(w, "project not found", http.StatusNotFound)
+			return
+		}
+
+		log.Printf("failed to load git info for project %s: %v", projectID, err)
+		http.Error(w, "failed to load git info", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, info)
 }
 
 func writeFileResponse(

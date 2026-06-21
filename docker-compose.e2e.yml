@@ -24,6 +24,7 @@ services:
         printf "package sample\n\ntype Greeter struct{}\n\nfunc (g Greeter) Greet() string { return \"hi\" }\n\nfunc Use() string { g := Greeter{}; return g.Greet() }\n" > "$$repo_root/lib.go"
         git -C "$$repo_root" add base.txt second.txt go.mod lib.go
         git -C "$$repo_root" commit -qm "base"
+        git -C "$$repo_root" branch -M main
         git -C "$$repo_root" branch feature/worktree-switch
         git -C "$$repo_root" worktree add "$$worktree_root" feature/worktree-switch
         printf "worktree\n" > "$$worktree_root/worktree.txt"
