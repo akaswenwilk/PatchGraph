@@ -56,7 +56,7 @@ func start(args []string) error {
 
 	server := &http.Server{
 		Addr:    ":" + *port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler, gitHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler, gitHandler, gitCheckoutHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -126,6 +126,15 @@ func gitHandler(projectID string) (projects.GitInfo, error) {
 	return projects.GetGitInfo(root, projectID)
 }
 
+func gitCheckoutHandler(projectID string, branch string) (projects.GitInfo, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return projects.GitInfo{}, err
+	}
+
+	return projects.CheckoutBranch(root, projectID, branch)
+}
+
 func fileHandler(projectID string, filename string) ([]string, error) {
 	root, err := projects.RootFromEnv()
 	if err != nil {
@@ -167,6 +176,7 @@ func newMux(
 	readFile func(string, string) ([]string, error),
 	analyzeFile func(string, string) (lsp.FileAnalysis, error),
 	getGitInfo func(string) (projects.GitInfo, error),
+	checkoutBranch func(string, string) (projects.GitInfo, error),
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -201,8 +211,13 @@ func newMux(
 			writeLSPResponse(w, r, projectID, analyzeFile)
 		case remainder == "git" && r.Method == http.MethodGet:
 			writeGitResponse(w, projectID, getGitInfo)
-		case remainder == "", remainder == "git":
+		case remainder == "git" && r.Method == http.MethodPost:
+			writeGitCheckoutResponse(w, r, projectID, checkoutBranch)
+		case remainder == "":
 			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		case remainder == "git":
+			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		case remainder == "files", remainder == "lsp":
 			w.Header().Set("Allow", http.MethodPost)
@@ -245,6 +260,56 @@ func writeGitResponse(w http.ResponseWriter, projectID string, getGitInfo func(s
 
 		log.Printf("failed to load git info for project %s: %v", projectID, err)
 		http.Error(w, "failed to load git info", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, info)
+}
+
+func writeGitCheckoutResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID string,
+	checkoutBranch func(string, string) (projects.GitInfo, error),
+) {
+	defer r.Body.Close()
+
+	var request struct {
+		Branch string `json:"branch"`
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(request.Branch) == "" {
+		http.Error(w, "branch is required", http.StatusBadRequest)
+		return
+	}
+
+	info, err := checkoutBranch(projectID, request.Branch)
+	if err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			http.Error(w, "project not found", http.StatusNotFound)
+		case errors.Is(err, projects.ErrBranchNotFound):
+			http.Error(w, "branch not found", http.StatusNotFound)
+		case errors.Is(err, projects.ErrUncommittedChanges):
+			http.Error(
+				w,
+				"You have uncommitted changes. Stash, commit, or discard them before switching branches.",
+				http.StatusConflict,
+			)
+		default:
+			log.Printf("failed to checkout branch %q in project %s: %v", request.Branch, projectID, err)
+			http.Error(w, "failed to switch branch", http.StatusInternalServerError)
+		}
 		return
 	}
 

@@ -54,6 +54,10 @@ type OpenFile = {
 	// When set, the window shows only this inclusive line span instead of the
 	// whole file — used to open a definition as just its own lines.
 	visibleRange: { start: number; end: number } | null
+	// True when the file does not exist on the currently checked-out branch. The
+	// window stays open showing a "(deleted)" placeholder and is restored if the
+	// user switches back to a branch where the file exists.
+	deleted: boolean
 	width: number | null
 	height: number | null
 	x: number
@@ -458,6 +462,10 @@ function App() {
 	const [gitState, setGitState] = useState<LoadState>('idle')
 	const [gitError, setGitError] = useState('')
 	const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
+	// Branch name currently being checked out, or null when no switch is in
+	// flight. Used to disable the branch list and show a pending indicator.
+	const [checkoutBranch, setCheckoutBranch] = useState<string | null>(null)
+	const [checkoutError, setCheckoutError] = useState('')
 	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
 	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
@@ -810,6 +818,7 @@ function App() {
 		setIsGitOpen(true)
 		setGitState('loading')
 		setGitError('')
+		setCheckoutError('')
 		setGitInfo(null)
 
 		try {
@@ -829,6 +838,157 @@ function App() {
 			setGitInfo(null)
 			setGitState('error')
 			setGitError(error instanceof Error ? error.message : 'Unknown error')
+		}
+	}
+
+	// Switches the open repo to another local branch. On success the explorer
+	// tree and every open window reload against the new branch; on a dirty working
+	// tree (HTTP 409) the backend's message is shown and nothing reloads.
+	async function handleBranchSelect(branch: string) {
+		if (activeProject === null || gitInfo === null) {
+			return
+		}
+		if (branch === gitInfo.current || checkoutBranch !== null) {
+			return
+		}
+
+		const projectID = activeProject.id
+		setCheckoutBranch(branch)
+		setCheckoutError('')
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/git`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ branch }),
+			})
+			if (!response.ok) {
+				const message = (await response.text()).trim()
+				throw new Error(message || `Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			if (!isGitInfo(data)) {
+				throw new Error('Git response was invalid')
+			}
+
+			setGitInfo(data)
+			await refreshProjectFiles(projectID)
+			await reloadOpenWindowsForBranch(projectID)
+		} catch (error) {
+			setCheckoutError(error instanceof Error ? error.message : 'Unknown error')
+		} finally {
+			setCheckoutBranch(null)
+		}
+	}
+
+	// Re-fetches the project's file list after a branch switch, updating the
+	// explorer tree while preserving the expanded folders and open windows.
+	async function refreshProjectFiles(projectID: string) {
+		const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}`)
+		if (!response.ok) {
+			throw new Error(`Request failed with status ${response.status}`)
+		}
+
+		const data: unknown = await response.json()
+		if (!isProjectDetail(data)) {
+			throw new Error('Project response was invalid')
+		}
+
+		const project = {
+			...data,
+			files: [...data.files].sort((left, right) => left.localeCompare(right)),
+		}
+		setActiveProject(project)
+		setFileTree(buildTree(project.files))
+	}
+
+	// Reloads every open window's contents for the current branch. A file missing
+	// on the new branch becomes a "(deleted)" placeholder; switching back to a
+	// branch where it exists restores its contents.
+	async function reloadOpenWindowsForBranch(projectID: string) {
+		const windows = openFiles
+		await Promise.all(windows.map((fileWindow) => reloadWindowForBranch(projectID, fileWindow)))
+	}
+
+	async function reloadWindowForBranch(projectID: string, fileWindow: OpenFile) {
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/files`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ filename: fileWindow.filename }),
+			})
+
+			// The file does not exist on this branch: keep the window open as a
+			// deleted placeholder rather than closing or erroring it.
+			if (response.status === 404) {
+				setOpenFiles((current) =>
+					current.map((candidate) =>
+						candidate.id === fileWindow.id
+							? {
+									...candidate,
+									state: 'ready',
+									error: '',
+									deleted: true,
+									lines: [],
+									symbols: [],
+									lspState: 'idle',
+								}
+							: candidate,
+					),
+				)
+				return
+			}
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			if (!Array.isArray(data) || data.some((entry) => typeof entry !== 'string')) {
+				throw new Error('File response was not a string array')
+			}
+
+			setOpenFiles((current) =>
+				current.map((candidate) => {
+					if (candidate.id !== fileWindow.id) {
+						return candidate
+					}
+
+					// A cropped view (e.g. lines 30–40) whose lines no longer exist on
+					// this branch falls back to the whole file at the same window size.
+					const rangeFits =
+						candidate.visibleRange !== null &&
+						candidate.visibleRange.start < data.length &&
+						candidate.visibleRange.end < data.length
+					const focusFits = candidate.focusLine !== null && candidate.focusLine < data.length
+
+					return {
+						...candidate,
+						state: 'ready',
+						error: '',
+						deleted: false,
+						lines: data,
+						visibleRange: rangeFits ? candidate.visibleRange : null,
+						focusLine: focusFits ? candidate.focusLine : null,
+					}
+				}),
+			)
+
+			void loadLspInfo(projectID, fileWindow.filename, fileWindow.id)
+		} catch (error) {
+			setOpenFiles((current) =>
+				current.map((candidate) =>
+					candidate.id === fileWindow.id
+						? {
+								...candidate,
+								state: 'error',
+								error: error instanceof Error ? error.message : 'Unknown error',
+								deleted: false,
+								lines: [],
+							}
+						: candidate,
+				),
+			)
 		}
 	}
 
@@ -907,6 +1067,7 @@ function App() {
 			symbols: [],
 			focusLine: null,
 			visibleRange: null,
+			deleted: false,
 			width,
 			height,
 			x,
@@ -1508,12 +1669,19 @@ function App() {
 											<div className="file-window-title-group">
 												<div>
 													<p className="workspace-eyebrow">{activeProject?.name ?? ''}</p>
-													<h2>{fileWindow.filename}</h2>
+													<h2>
+														{fileWindow.filename}
+														{fileWindow.deleted ? (
+															<span className="file-window-deleted-tag"> (deleted)</span>
+														) : null}
+													</h2>
 												</div>
-												<div className="file-window-meta">
-													<p>{fileWindow.lines.length} lines</p>
-													<LspStatusChip fileWindow={fileWindow} />
-												</div>
+												{!fileWindow.deleted ? (
+													<div className="file-window-meta">
+														<p>{fileWindow.lines.length} lines</p>
+														<LspStatusChip fileWindow={fileWindow} />
+													</div>
+												) : null}
 											</div>
 
 											<button
@@ -1526,22 +1694,28 @@ function App() {
 											</button>
 										</header>
 
-										<div className="file-code-scroll">
-											<CodeView
-												filename={fileWindow.filename}
-												lines={fileWindow.lines}
-												symbols={fileWindow.symbols}
-												focusLine={fileWindow.focusLine}
-												visibleRange={fileWindow.visibleRange}
-												windowID={fileWindow.id}
-												openBubble={openBubble}
-												onBubbleChange={setOpenBubble}
-												onOpenLocation={(path, line, source, visibleRange) =>
-													openLocationInNewWindow(fileWindow.id, path, line, source, visibleRange)
-												}
-												onStartConnection={startConnectionDraw}
-											/>
-										</div>
+										{fileWindow.deleted ? (
+											<div className="file-window-deleted-body">
+												<p>This file does not exist on the current branch.</p>
+											</div>
+										) : (
+											<div className="file-code-scroll">
+												<CodeView
+													filename={fileWindow.filename}
+													lines={fileWindow.lines}
+													symbols={fileWindow.symbols}
+													focusLine={fileWindow.focusLine}
+													visibleRange={fileWindow.visibleRange}
+													windowID={fileWindow.id}
+													openBubble={openBubble}
+													onBubbleChange={setOpenBubble}
+													onOpenLocation={(path, line, source, visibleRange) =>
+														openLocationInNewWindow(fileWindow.id, path, line, source, visibleRange)
+													}
+													onStartConnection={startConnectionDraw}
+												/>
+											</div>
+										)}
 									</>
 								)}
 
@@ -1743,25 +1917,36 @@ function App() {
 
 									<div className="git-branches">
 										<p className="git-branches-title">Local branches</p>
+										{checkoutError !== '' ? (
+											<p className="project-status project-status-error">{checkoutError}</p>
+										) : null}
 										{gitInfo.branches.length === 0 ? (
 											<p className="project-status">No local branches.</p>
 										) : (
 											<ul className="git-branch-list">
 												{gitInfo.branches.map((branch) => {
 													const isCurrent = branch === gitInfo.current
+													const isPending = branch === checkoutBranch
 													return (
-														<li
-															key={branch}
-															className={
-																isCurrent
-																	? 'git-branch-row git-branch-row-current'
-																	: 'git-branch-row'
-															}
-														>
-															<span className="git-branch-name">{branch}</span>
-															{isCurrent ? (
-																<span className="git-branch-badge">current</span>
-															) : null}
+														<li key={branch}>
+															<button
+																type="button"
+																className={
+																	isCurrent
+																		? 'git-branch-row git-branch-row-current'
+																		: 'git-branch-row'
+																}
+																aria-current={isCurrent ? 'true' : undefined}
+																disabled={isCurrent || checkoutBranch !== null}
+																onClick={() => void handleBranchSelect(branch)}
+															>
+																<span className="git-branch-name">{branch}</span>
+																{isCurrent ? (
+																	<span className="git-branch-badge">current</span>
+																) : isPending ? (
+																	<span className="git-branch-badge">switching…</span>
+																) : null}
+															</button>
 														</li>
 													)
 												})}

@@ -19,7 +19,7 @@ func TestProjectsEndpointReturnsProjects(t *testing.T) {
 			{ID: "alpha", Name: "PatchGraph", Path: "PatchGraph"},
 			{ID: "beta", Name: "PatchGraph", Path: "team/PatchGraph"},
 		}, nil
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -42,7 +42,7 @@ func TestProjectsEndpointReturnsProjects(t *testing.T) {
 func TestProjectsEndpointReturnsInternalServerError(t *testing.T) {
 	handler := newMux(func() ([]projects.Project, error) {
 		return nil, errors.New("boom")
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -57,7 +57,7 @@ func TestProjectsEndpointReturnsInternalServerError(t *testing.T) {
 func TestProjectsEndpointRejectsPost(t *testing.T) {
 	handler := newMux(func() ([]projects.Project, error) {
 		return []projects.Project{{ID: "alpha", Name: "PatchGraph", Path: "PatchGraph"}}, nil
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -73,7 +73,7 @@ func TestProjectsEndpointRejectsPost(t *testing.T) {
 }
 
 func TestRootServesFrontend(t *testing.T) {
-	handler := newMux(nil, nil, nil, nil, nil)
+	handler := newMux(nil, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	recorder := httptest.NewRecorder()
@@ -89,7 +89,7 @@ func TestRootServesFrontend(t *testing.T) {
 }
 
 func TestUnknownAPIRouteReturnsNotFound(t *testing.T) {
-	handler := newMux(nil, nil, nil, nil, nil)
+	handler := newMux(nil, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/unknown", nil)
 	recorder := httptest.NewRecorder()
@@ -118,6 +118,7 @@ func TestProjectEndpointReturnsDetail(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects/alpha", nil)
@@ -141,6 +142,7 @@ func TestProjectEndpointReturnsNotFound(t *testing.T) {
 		func(projectID string) (projects.Detail, error) {
 			return projects.Detail{}, fs.ErrNotExist
 		},
+		nil,
 		nil,
 		nil,
 		nil,
@@ -171,6 +173,7 @@ func TestProjectGitEndpointReturnsBranches(t *testing.T) {
 				Branches: []string{"feature/foo", "main"},
 			}, nil
 		},
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects/alpha/git", nil)
@@ -197,6 +200,7 @@ func TestProjectGitEndpointReturnsNotFound(t *testing.T) {
 		func(projectID string) (projects.GitInfo, error) {
 			return projects.GitInfo{}, fs.ErrNotExist
 		},
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects/missing/git", nil)
@@ -209,16 +213,17 @@ func TestProjectGitEndpointReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestProjectGitEndpointRejectsPost(t *testing.T) {
+func TestProjectGitEndpointRejectsPut(t *testing.T) {
 	handler := newMux(
 		func() ([]projects.Project, error) { return nil, nil },
 		nil,
 		nil,
 		nil,
 		func(projectID string) (projects.GitInfo, error) { return projects.GitInfo{}, nil },
+		nil,
 	)
 
-	request := httptest.NewRequest(http.MethodPost, "/api/projects/alpha/git", nil)
+	request := httptest.NewRequest(http.MethodPut, "/api/projects/alpha/git", nil)
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, request)
@@ -226,8 +231,131 @@ func TestProjectGitEndpointRejectsPost(t *testing.T) {
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
 	}
-	if allow := recorder.Header().Get("Allow"); allow != http.MethodGet {
-		t.Fatalf("Allow = %q, want %q", allow, http.MethodGet)
+	if allow := recorder.Header().Get("Allow"); allow != "GET, POST" {
+		t.Fatalf("Allow = %q, want %q", allow, "GET, POST")
+	}
+}
+
+func TestProjectGitCheckoutReturnsUpdatedInfo(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		nil,
+		nil,
+		nil,
+		func(projectID string, branch string) (projects.GitInfo, error) {
+			if projectID != "alpha" {
+				t.Fatalf("projectID = %q, want %q", projectID, "alpha")
+			}
+			if branch != "feature/foo" {
+				t.Fatalf("branch = %q, want %q", branch, "feature/foo")
+			}
+			return projects.GitInfo{
+				Current:  "feature/foo",
+				Branches: []string{"feature/foo", "main"},
+			}, nil
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/git",
+		strings.NewReader("{\"branch\":\"feature/foo\"}"),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := strings.TrimSpace(recorder.Body.String())
+	want := "{\"current\":\"feature/foo\",\"branches\":[\"feature/foo\",\"main\"]}"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestProjectGitCheckoutReturnsConflictOnDirtyTree(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		nil,
+		nil,
+		nil,
+		func(projectID string, branch string) (projects.GitInfo, error) {
+			return projects.GitInfo{}, projects.ErrUncommittedChanges
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/git",
+		strings.NewReader("{\"branch\":\"feature/foo\"}"),
+	)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
+	}
+	if !strings.Contains(recorder.Body.String(), "uncommitted changes") {
+		t.Fatalf("body = %q, want it to mention uncommitted changes", recorder.Body.String())
+	}
+}
+
+func TestProjectGitCheckoutReturnsNotFoundForUnknownBranch(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		nil,
+		nil,
+		nil,
+		func(projectID string, branch string) (projects.GitInfo, error) {
+			return projects.GitInfo{}, projects.ErrBranchNotFound
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/git",
+		strings.NewReader("{\"branch\":\"nope\"}"),
+	)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
+func TestProjectGitCheckoutRejectsMissingBranch(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		nil,
+		nil,
+		nil,
+		func(projectID string, branch string) (projects.GitInfo, error) {
+			t.Fatal("checkout should not be called when branch is missing")
+			return projects.GitInfo{}, nil
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/git",
+		strings.NewReader("{\"branch\":\"  \"}"),
+	)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 }
 
@@ -244,6 +372,7 @@ func TestProjectFileEndpointReturnsLines(t *testing.T) {
 			}
 			return []string{"line 1", "\tline 2"}, nil
 		},
+		nil,
 		nil,
 		nil,
 	)
@@ -276,6 +405,7 @@ func TestProjectFileEndpointReturnsProjectNotFound(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects/missing/files", strings.NewReader("{\"filename\":\"README.md\"}"))
@@ -296,6 +426,7 @@ func TestProjectFileEndpointRejectsInvalidBody(t *testing.T) {
 		func(projectID string, filename string) ([]string, error) { return nil, nil },
 		nil,
 		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects/alpha/files", strings.NewReader("{"))
@@ -313,6 +444,7 @@ func TestProjectFileEndpointRejectsGet(t *testing.T) {
 		func() ([]projects.Project, error) { return nil, nil },
 		nil,
 		func(projectID string, filename string) ([]string, error) { return nil, nil },
+		nil,
 		nil,
 		nil,
 	)

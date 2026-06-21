@@ -28,6 +28,12 @@ services:
         git -C "$$repo_root" branch feature/worktree-switch
         git -C "$$repo_root" worktree add "$$worktree_root" feature/worktree-switch
         printf "worktree\n" > "$$worktree_root/worktree.txt"
+        # A plain (non-worktree) branch the UI can switch to, plus a file that
+        # exists only on main so switching away deletes its open window.
+        git -C "$$repo_root" branch playground
+        printf "only on main\n" > "$$repo_root/only-on-main.txt"
+        git -C "$$repo_root" add only-on-main.txt
+        git -C "$$repo_root" commit -qm "main-only file"
 
   backend:
     build:

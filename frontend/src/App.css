@@ -1234,13 +1234,42 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
+	width: 100%;
 	padding: 10px 14px;
+	border: 0;
 	border-radius: 14px;
 	background: rgba(255, 255, 255, 0.05);
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition: background 140ms ease;
+}
+
+.git-branch-row:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.12);
+}
+
+.git-branch-row:disabled {
+	cursor: default;
 }
 
 .git-branch-row-current {
 	background: rgba(95, 173, 255, 0.16);
+}
+
+.file-window-deleted-tag {
+	color: #ff9a9a;
+	font-weight: 600;
+}
+
+.file-window-deleted-body {
+	flex: 1;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	color: rgba(232, 238, 248, 0.6);
+	text-align: center;
 }
 
 .git-branch-name {

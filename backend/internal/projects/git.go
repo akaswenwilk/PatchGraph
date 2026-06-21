@@ -2,8 +2,19 @@ package projects
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
+)
+
+var (
+	// ErrUncommittedChanges reports that a branch switch was blocked because the
+	// working tree has staged or unstaged modifications to tracked files.
+	ErrUncommittedChanges = errors.New("uncommitted changes")
+	// ErrBranchNotFound reports that the requested branch is not a local branch.
+	ErrBranchNotFound = errors.New("branch not found")
 )
 
 // GitInfo describes the branch state of a project's git repository.
@@ -23,6 +34,47 @@ func GetGitInfo(root, id string) (GitInfo, error) {
 		return GitInfo{}, err
 	}
 
+	return gitInfo(project)
+}
+
+// CheckoutBranch switches the project's repository to the named local branch
+// and returns the resulting branch state. It refuses to switch when the working
+// tree has uncommitted changes to tracked files (ErrUncommittedChanges) or when
+// the branch is not a known local branch (ErrBranchNotFound), so the caller can
+// surface an actionable message rather than risk clobbering work.
+func CheckoutBranch(root, id, branch string) (GitInfo, error) {
+	project, err := FindByID(root, id)
+	if err != nil {
+		return GitInfo{}, err
+	}
+
+	branches, err := localBranches(project)
+	if err != nil {
+		return GitInfo{}, err
+	}
+	if !slices.Contains(branches, branch) {
+		return GitInfo{}, ErrBranchNotFound
+	}
+
+	dirty, err := hasUncommittedChanges(project)
+	if err != nil {
+		return GitInfo{}, err
+	}
+	if dirty {
+		return GitInfo{}, ErrUncommittedChanges
+	}
+
+	output, err := gitCommand(project, "checkout", branch).CombinedOutput()
+	if err != nil {
+		return GitInfo{}, fmt.Errorf("git checkout %s: %w: %s", branch, err, strings.TrimSpace(string(output)))
+	}
+
+	return gitInfo(project)
+}
+
+// gitInfo reports the current and local branch state for an already-resolved
+// project.
+func gitInfo(project Project) (GitInfo, error) {
 	current, err := currentBranch(project)
 	if err != nil {
 		return GitInfo{}, err
@@ -34,6 +86,30 @@ func GetGitInfo(root, id string) (GitInfo, error) {
 	}
 
 	return GitInfo{Current: current, Branches: branches}, nil
+}
+
+// hasUncommittedChanges reports whether the working tree has staged or unstaged
+// changes to tracked files. Untracked files are ignored: git carries them
+// across a branch switch without data loss, so they should not block one.
+func hasUncommittedChanges(project Project) (bool, error) {
+	output, err := gitCommand(project, "status", "--porcelain").Output()
+	if err != nil {
+		return false, err
+	}
+
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
+		trimmed := bytes.TrimRight(line, "\r")
+		if len(bytes.TrimSpace(trimmed)) == 0 {
+			continue
+		}
+		// "??" marks an untracked file; everything else is a tracked change.
+		if bytes.HasPrefix(trimmed, []byte("??")) {
+			continue
+		}
+		return true, nil
+	}
+
+	return false, nil
 }
 
 // currentBranch returns the checked-out branch name, or "" when HEAD is
