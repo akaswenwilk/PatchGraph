@@ -15,6 +15,8 @@ var (
 	ErrUncommittedChanges = errors.New("uncommitted changes")
 	// ErrBranchNotFound reports that the requested branch is not a local branch.
 	ErrBranchNotFound = errors.New("branch not found")
+	// ErrBranchExists reports that a branch to be created already exists.
+	ErrBranchExists = errors.New("branch already exists")
 )
 
 // GitInfo describes the branch state of a project's git repository.
@@ -73,6 +75,37 @@ func CheckoutBranch(root, id, branch string) (GitInfo, error) {
 			detail = err.Error()
 		}
 		return GitInfo{}, fmt.Errorf("git checkout failed: %s", detail)
+	}
+
+	return gitInfo(project)
+}
+
+// CreateBranch creates a new local branch off the current HEAD and switches to
+// it, returning the resulting branch state. It does not require a clean working
+// tree: the new branch points at the same commit, so the working tree is
+// carried over without data loss. It fails if the branch already exists
+// (ErrBranchExists) or git rejects the name (the reason is surfaced).
+func CreateBranch(root, id, branch string) (GitInfo, error) {
+	project, err := FindByID(root, id)
+	if err != nil {
+		return GitInfo{}, err
+	}
+
+	branches, err := localBranches(project)
+	if err != nil {
+		return GitInfo{}, err
+	}
+	if slices.Contains(branches, branch) {
+		return GitInfo{}, ErrBranchExists
+	}
+
+	output, err := gitCommand(project, "checkout", "-b", branch).CombinedOutput()
+	if err != nil {
+		detail := strings.Join(strings.Fields(string(output)), " ")
+		if detail == "" {
+			detail = err.Error()
+		}
+		return GitInfo{}, fmt.Errorf("git checkout -b failed: %s", detail)
 	}
 
 	return gitInfo(project)

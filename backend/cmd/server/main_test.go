@@ -243,12 +243,15 @@ func TestProjectGitCheckoutReturnsUpdatedInfo(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func(projectID string, branch string) (projects.GitInfo, error) {
+		func(projectID string, branch string, create bool) (projects.GitInfo, error) {
 			if projectID != "alpha" {
 				t.Fatalf("projectID = %q, want %q", projectID, "alpha")
 			}
 			if branch != "feature/foo" {
 				t.Fatalf("branch = %q, want %q", branch, "feature/foo")
+			}
+			if create {
+				t.Fatal("create = true, want false for a plain checkout")
 			}
 			return projects.GitInfo{
 				Current:  "feature/foo",
@@ -277,6 +280,76 @@ func TestProjectGitCheckoutReturnsUpdatedInfo(t *testing.T) {
 	}
 }
 
+func TestProjectGitCreateBranchPassesCreateFlag(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		nil,
+		nil,
+		nil,
+		func(projectID string, branch string, create bool) (projects.GitInfo, error) {
+			if branch != "feature/new" {
+				t.Fatalf("branch = %q, want %q", branch, "feature/new")
+			}
+			if !create {
+				t.Fatal("create = false, want true")
+			}
+			return projects.GitInfo{
+				Current:  "feature/new",
+				Branches: []string{"feature/new", "main"},
+			}, nil
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/git",
+		strings.NewReader("{\"branch\":\"feature/new\",\"create\":true}"),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := strings.TrimSpace(recorder.Body.String())
+	want := "{\"current\":\"feature/new\",\"branches\":[\"feature/new\",\"main\"]}"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestProjectGitCreateBranchReturnsConflictWhenExists(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		nil,
+		nil,
+		nil,
+		func(projectID string, branch string, create bool) (projects.GitInfo, error) {
+			return projects.GitInfo{}, projects.ErrBranchExists
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/git",
+		strings.NewReader("{\"branch\":\"main\",\"create\":true}"),
+	)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
+	}
+	if !strings.Contains(recorder.Body.String(), "already exists") {
+		t.Fatalf("body = %q, want it to mention the branch already exists", recorder.Body.String())
+	}
+}
+
 func TestProjectGitCheckoutReturnsConflictOnDirtyTree(t *testing.T) {
 	handler := newMux(
 		func() ([]projects.Project, error) { return nil, nil },
@@ -284,7 +357,7 @@ func TestProjectGitCheckoutReturnsConflictOnDirtyTree(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func(projectID string, branch string) (projects.GitInfo, error) {
+		func(projectID string, branch string, create bool) (projects.GitInfo, error) {
 			return projects.GitInfo{}, projects.ErrUncommittedChanges
 		},
 	)
@@ -313,7 +386,7 @@ func TestProjectGitCheckoutSurfacesFailureReason(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func(projectID string, branch string) (projects.GitInfo, error) {
+		func(projectID string, branch string, create bool) (projects.GitInfo, error) {
 			return projects.GitInfo{}, errors.New("git checkout failed: untracked file would be overwritten")
 		},
 	)
@@ -342,7 +415,7 @@ func TestProjectGitCheckoutReturnsNotFoundForUnknownBranch(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func(projectID string, branch string) (projects.GitInfo, error) {
+		func(projectID string, branch string, create bool) (projects.GitInfo, error) {
 			return projects.GitInfo{}, projects.ErrBranchNotFound
 		},
 	)
@@ -368,7 +441,7 @@ func TestProjectGitCheckoutRejectsMissingBranch(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func(projectID string, branch string) (projects.GitInfo, error) {
+		func(projectID string, branch string, create bool) (projects.GitInfo, error) {
 			t.Fatal("checkout should not be called when branch is missing")
 			return projects.GitInfo{}, nil
 		},

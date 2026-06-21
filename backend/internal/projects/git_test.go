@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -126,6 +127,61 @@ func TestCheckoutBranchRejectsUncommittedChanges(t *testing.T) {
 	_, err := CheckoutBranch(root, projectID(repoPath), "feature/foo")
 	if !errors.Is(err, ErrUncommittedChanges) {
 		t.Fatalf("CheckoutBranch() error = %v, want %v", err, ErrUncommittedChanges)
+	}
+}
+
+func TestCreateBranchCreatesAndSwitches(t *testing.T) {
+	repoPath, root := initBranchedRepo(t)
+
+	info, err := CreateBranch(root, projectID(repoPath), "feature/new")
+	if err != nil {
+		t.Fatalf("CreateBranch() error = %v", err)
+	}
+	if info.Current != "feature/new" {
+		t.Fatalf("info.Current = %q, want %q", info.Current, "feature/new")
+	}
+	if !slices.Contains(info.Branches, "feature/new") {
+		t.Fatalf("info.Branches = %v, want it to contain feature/new", info.Branches)
+	}
+}
+
+func TestCreateBranchRejectsExistingBranch(t *testing.T) {
+	repoPath, root := initBranchedRepo(t)
+
+	_, err := CreateBranch(root, projectID(repoPath), "feature/foo")
+	if !errors.Is(err, ErrBranchExists) {
+		t.Fatalf("CreateBranch() error = %v, want %v", err, ErrBranchExists)
+	}
+}
+
+func TestCreateBranchKeepsUncommittedChanges(t *testing.T) {
+	repoPath, root := initBranchedRepo(t)
+
+	// A dirty working tree must not block creating a branch off the current
+	// commit; the change is carried onto the new branch.
+	if err := os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	info, err := CreateBranch(root, projectID(repoPath), "feature/new")
+	if err != nil {
+		t.Fatalf("CreateBranch() error = %v", err)
+	}
+	if info.Current != "feature/new" {
+		t.Fatalf("info.Current = %q, want %q", info.Current, "feature/new")
+	}
+}
+
+func TestCreateBranchRejectsInvalidName(t *testing.T) {
+	repoPath, root := initBranchedRepo(t)
+
+	_, err := CreateBranch(root, projectID(repoPath), "bad name")
+	if err == nil {
+		t.Fatal("CreateBranch() error = nil, want a git rejection")
+	}
+	// The reason is surfaced rather than swallowed.
+	if !strings.Contains(err.Error(), "git checkout -b failed") {
+		t.Fatalf("CreateBranch() error = %v, want it to surface the git reason", err)
 	}
 }
 

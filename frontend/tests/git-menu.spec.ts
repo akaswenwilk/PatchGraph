@@ -37,6 +37,34 @@ test('git menu shows the current branch and local branches', async ({ page }) =>
 	await expect(gitDialog).not.toBeVisible()
 })
 
+test('creating a branch switches to it and adds it to the list', async ({ page }) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: 'Git', exact: true }).click()
+
+	const gitDialog = page.getByRole('dialog', { name: 'Git' })
+	await expect(gitDialog).toBeVisible()
+	await expect(gitDialog.locator('.git-current-branch')).toHaveText('main')
+
+	await gitDialog.getByRole('button', { name: 'Create branch' }).click()
+	await gitDialog.getByRole('textbox', { name: 'New branch name' }).fill('feature/scratch')
+	await gitDialog.getByRole('button', { name: 'Create', exact: true }).click()
+
+	// The new branch is created off main, becomes current, and joins the list.
+	await expect(gitDialog.locator('.git-current-branch')).toHaveText('feature/scratch')
+	await expect(
+		gitDialog.locator('.git-branch-name', { hasText: 'feature/scratch' }),
+	).toBeVisible()
+
+	// Re-creating an existing branch surfaces the reason instead of switching.
+	await gitDialog.getByRole('button', { name: 'Create branch' }).click()
+	await gitDialog.getByRole('textbox', { name: 'New branch name' }).fill('main')
+	await gitDialog.getByRole('button', { name: 'Create', exact: true }).click()
+	await expect(gitDialog.getByText(/already exists/i)).toBeVisible()
+	await expect(gitDialog.locator('.git-current-branch')).toHaveText('feature/scratch')
+})
+
 test('switching branches reloads windows, marks deleted files, and restores them', async ({
 	page,
 }) => {

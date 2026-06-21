@@ -466,6 +466,12 @@ function App() {
 	// flight. Used to disable the branch list and show a pending indicator.
 	const [checkoutBranch, setCheckoutBranch] = useState<string | null>(null)
 	const [checkoutError, setCheckoutError] = useState('')
+	// New-branch creation form: whether the input is shown, its value, the
+	// in-flight flag, and any error returned by the create request.
+	const [isBranchFormOpen, setIsBranchFormOpen] = useState(false)
+	const [newBranchName, setNewBranchName] = useState('')
+	const [createBranchPending, setCreateBranchPending] = useState(false)
+	const [createBranchError, setCreateBranchError] = useState('')
 	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
 	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
@@ -819,6 +825,9 @@ function App() {
 		setGitState('loading')
 		setGitError('')
 		setCheckoutError('')
+		setIsBranchFormOpen(false)
+		setNewBranchName('')
+		setCreateBranchError('')
 		setGitInfo(null)
 
 		try {
@@ -872,14 +881,63 @@ function App() {
 				throw new Error('Git response was invalid')
 			}
 
-			setGitInfo(data)
-			await refreshProjectFiles(projectID)
-			await reloadOpenWindowsForBranch(projectID)
+			await applyBranchMutation(projectID, data)
 		} catch (error) {
 			setCheckoutError(error instanceof Error ? error.message : 'Unknown error')
 		} finally {
 			setCheckoutBranch(null)
 		}
+	}
+
+	// Creates a new branch off the current branch and switches to it. A dirty
+	// working tree does not block this (the new branch is at the same commit), so
+	// the only common failures are an existing name or an invalid name, whose
+	// reason the backend returns and we show inline.
+	async function handleCreateBranch() {
+		if (activeProject === null || gitInfo === null) {
+			return
+		}
+		const branch = newBranchName.trim()
+		if (branch === '' || createBranchPending || checkoutBranch !== null) {
+			return
+		}
+
+		const projectID = activeProject.id
+		setCreateBranchPending(true)
+		setCreateBranchError('')
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(projectID)}/git`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ branch, create: true }),
+			})
+			if (!response.ok) {
+				const message = (await response.text()).trim()
+				throw new Error(message || `Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			if (!isGitInfo(data)) {
+				throw new Error('Git response was invalid')
+			}
+
+			await applyBranchMutation(projectID, data)
+			setIsBranchFormOpen(false)
+			setNewBranchName('')
+		} catch (error) {
+			setCreateBranchError(error instanceof Error ? error.message : 'Unknown error')
+		} finally {
+			setCreateBranchPending(false)
+		}
+	}
+
+	// Shared post-mutation refresh for both switching and creating a branch:
+	// adopt the new branch state, refresh the explorer tree, and reload windows.
+	async function applyBranchMutation(projectID: string, info: GitInfo) {
+		setGitInfo(info)
+		await refreshProjectFiles(projectID)
+		await reloadOpenWindowsForBranch(projectID)
 	}
 
 	// Re-fetches the project's file list after a branch switch, updating the
@@ -1916,7 +1974,54 @@ function App() {
 									</div>
 
 									<div className="git-branches">
-										<p className="git-branches-title">Local branches</p>
+										<div className="git-branches-header">
+											<p className="git-branches-title">Local branches</p>
+											<button
+												type="button"
+												className="git-add-branch-button"
+												aria-label="Create branch"
+												aria-expanded={isBranchFormOpen}
+												disabled={checkoutBranch !== null || createBranchPending}
+												onClick={() => {
+													setCreateBranchError('')
+													setIsBranchFormOpen((open) => !open)
+												}}
+											>
+												+
+											</button>
+										</div>
+
+										{isBranchFormOpen ? (
+											<form
+												className="git-branch-form"
+												onSubmit={(event) => {
+													event.preventDefault()
+													void handleCreateBranch()
+												}}
+											>
+												<input
+													type="text"
+													className="git-branch-input"
+													value={newBranchName}
+													onChange={(event) => setNewBranchName(event.target.value)}
+													placeholder={`New branch from ${gitInfo.current || 'HEAD'}`}
+													aria-label="New branch name"
+													disabled={createBranchPending}
+													autoFocus
+												/>
+												<button
+													type="submit"
+													className="primary-button"
+													disabled={createBranchPending || newBranchName.trim() === ''}
+												>
+													{createBranchPending ? 'Creating…' : 'Create'}
+												</button>
+											</form>
+										) : null}
+
+										{createBranchError !== '' ? (
+											<p className="project-status project-status-error">{createBranchError}</p>
+										) : null}
 										{checkoutError !== '' ? (
 											<p className="project-status project-status-error">{checkoutError}</p>
 										) : null}
@@ -1937,7 +2042,7 @@ function App() {
 																		: 'git-branch-row'
 																}
 																aria-current={isCurrent ? 'true' : undefined}
-																disabled={isCurrent || checkoutBranch !== null}
+																disabled={isCurrent || checkoutBranch !== null || createBranchPending}
 																onClick={() => void handleBranchSelect(branch)}
 															>
 																<span className="git-branch-name">{branch}</span>

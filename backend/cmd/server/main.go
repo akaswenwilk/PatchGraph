@@ -56,7 +56,7 @@ func start(args []string) error {
 
 	server := &http.Server{
 		Addr:    ":" + *port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler, gitHandler, gitCheckoutHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler, gitHandler, gitMutateHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -126,10 +126,16 @@ func gitHandler(projectID string) (projects.GitInfo, error) {
 	return projects.GetGitInfo(root, projectID)
 }
 
-func gitCheckoutHandler(projectID string, branch string) (projects.GitInfo, error) {
+// gitMutateHandler switches to an existing branch, or creates a new branch off
+// the current HEAD when create is true.
+func gitMutateHandler(projectID string, branch string, create bool) (projects.GitInfo, error) {
 	root, err := projects.RootFromEnv()
 	if err != nil {
 		return projects.GitInfo{}, err
+	}
+
+	if create {
+		return projects.CreateBranch(root, projectID, branch)
 	}
 
 	return projects.CheckoutBranch(root, projectID, branch)
@@ -176,7 +182,7 @@ func newMux(
 	readFile func(string, string) ([]string, error),
 	analyzeFile func(string, string) (lsp.FileAnalysis, error),
 	getGitInfo func(string) (projects.GitInfo, error),
-	checkoutBranch func(string, string) (projects.GitInfo, error),
+	mutateBranch func(string, string, bool) (projects.GitInfo, error),
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +218,7 @@ func newMux(
 		case remainder == "git" && r.Method == http.MethodGet:
 			writeGitResponse(w, projectID, getGitInfo)
 		case remainder == "git" && r.Method == http.MethodPost:
-			writeGitCheckoutResponse(w, r, projectID, checkoutBranch)
+			writeGitMutateResponse(w, r, projectID, mutateBranch)
 		case remainder == "":
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -266,16 +272,17 @@ func writeGitResponse(w http.ResponseWriter, projectID string, getGitInfo func(s
 	writeJSON(w, info)
 }
 
-func writeGitCheckoutResponse(
+func writeGitMutateResponse(
 	w http.ResponseWriter,
 	r *http.Request,
 	projectID string,
-	checkoutBranch func(string, string) (projects.GitInfo, error),
+	mutateBranch func(string, string, bool) (projects.GitInfo, error),
 ) {
 	defer r.Body.Close()
 
 	var request struct {
 		Branch string `json:"branch"`
+		Create bool   `json:"create"`
 	}
 
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
@@ -293,13 +300,15 @@ func writeGitCheckoutResponse(
 		return
 	}
 
-	info, err := checkoutBranch(projectID, request.Branch)
+	info, err := mutateBranch(projectID, request.Branch, request.Create)
 	if err != nil {
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			http.Error(w, "project not found", http.StatusNotFound)
 		case errors.Is(err, projects.ErrBranchNotFound):
 			http.Error(w, "branch not found", http.StatusNotFound)
+		case errors.Is(err, projects.ErrBranchExists):
+			http.Error(w, "A branch named "+request.Branch+" already exists.", http.StatusConflict)
 		case errors.Is(err, projects.ErrUncommittedChanges):
 			http.Error(
 				w,
@@ -307,8 +316,12 @@ func writeGitCheckoutResponse(
 				http.StatusConflict,
 			)
 		default:
-			log.Printf("failed to checkout branch %q in project %s: %v", request.Branch, projectID, err)
-			http.Error(w, "Could not switch branch: "+err.Error(), http.StatusInternalServerError)
+			action := "switch branch"
+			if request.Create {
+				action = "create branch"
+			}
+			log.Printf("failed to %s %q in project %s: %v", action, request.Branch, projectID, err)
+			http.Error(w, "Could not "+action+": "+err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
