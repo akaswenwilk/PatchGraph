@@ -308,7 +308,7 @@ func writeGitCheckoutResponse(
 			)
 		default:
 			log.Printf("failed to checkout branch %q in project %s: %v", request.Branch, projectID, err)
-			http.Error(w, "failed to switch branch", http.StatusInternalServerError)
+			http.Error(w, "Could not switch branch: "+err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}

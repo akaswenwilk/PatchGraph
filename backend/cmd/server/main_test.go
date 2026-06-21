@@ -306,6 +306,35 @@ func TestProjectGitCheckoutReturnsConflictOnDirtyTree(t *testing.T) {
 	}
 }
 
+func TestProjectGitCheckoutSurfacesFailureReason(t *testing.T) {
+	handler := newMux(
+		func() ([]projects.Project, error) { return nil, nil },
+		nil,
+		nil,
+		nil,
+		nil,
+		func(projectID string, branch string) (projects.GitInfo, error) {
+			return projects.GitInfo{}, errors.New("git checkout failed: untracked file would be overwritten")
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/git",
+		strings.NewReader("{\"branch\":\"feature/foo\"}"),
+	)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(recorder.Body.String(), "untracked file would be overwritten") {
+		t.Fatalf("body = %q, want it to include the git failure reason", recorder.Body.String())
+	}
+}
+
 func TestProjectGitCheckoutReturnsNotFoundForUnknownBranch(t *testing.T) {
 	handler := newMux(
 		func() ([]projects.Project, error) { return nil, nil },

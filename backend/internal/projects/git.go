@@ -66,7 +66,13 @@ func CheckoutBranch(root, id, branch string) (GitInfo, error) {
 
 	output, err := gitCommand(project, "checkout", branch).CombinedOutput()
 	if err != nil {
-		return GitInfo{}, fmt.Errorf("git checkout %s: %w: %s", branch, err, strings.TrimSpace(string(output)))
+		// Surface git's own explanation (e.g. an untracked file that would be
+		// overwritten) flattened to a single line so the UI can show the reason.
+		detail := strings.Join(strings.Fields(string(output)), " ")
+		if detail == "" {
+			detail = err.Error()
+		}
+		return GitInfo{}, fmt.Errorf("git checkout failed: %s", detail)
 	}
 
 	return gitInfo(project)
