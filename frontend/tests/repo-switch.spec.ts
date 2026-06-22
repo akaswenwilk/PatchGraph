@@ -295,12 +295,15 @@ test('a previously-focused window can still be dragged after focusing another', 
 	expect(bodyCursor).not.toBe('grabbing')
 })
 
-test('a window can be dragged up past the content origin into the top margin', async ({
+test('dragging a window up grows the workspace upward instead of clamping', async ({
 	page,
 }) => {
 	await page.goto('/')
 
 	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	// A second window anchors the bottom of the cluster so moving the first one up
+	// visibly enlarges the canvas's vertical extent (and thus its scroll range).
+	await page.getByRole('button', { name: /second\.txt/ }).click()
 	await page.getByRole('button', { name: /base\.txt/ }).click()
 
 	const viewer = page.getByRole('region', { name: 'File viewer for base.txt' })
@@ -308,31 +311,38 @@ test('a window can be dragged up past the content origin into the top margin', a
 	const workspace = page.locator('.workspace')
 	await expect(viewer).toBeVisible()
 
-	// Canvas-space Y (independent of scroll).
-	const translateY = () =>
-		viewer.evaluate(
-			(element) => new DOMMatrixReadOnly(window.getComputedStyle(element).transform).m42,
-		)
-	const before = await translateY()
-
-	// Scroll so the window sits ~320px below the viewport top, clear of the edge
-	// where dragging up would otherwise trigger auto-scroll.
+	// Canvas-space Y of the window (independent of scroll), used to place it clear
+	// of the viewport edge where dragging up would trigger auto-scroll.
+	const translateY = await viewer.evaluate(
+		(element) => new DOMMatrixReadOnly(window.getComputedStyle(element).transform).m42,
+	)
 	await workspace.evaluate((element, target) => {
 		element.scrollTop = target
-	}, before - 320)
+	}, translateY - 320)
 
 	const box = await header.boundingBox()
 	if (box === null) {
 		throw new Error('Expected header bounding box')
 	}
+	const screenBefore = box.y
+	const scrollHeightBefore = await workspace.evaluate((element) => element.scrollHeight)
 
+	// Drag the top-most window straight up. Previously it clamped at the fixed
+	// PAN_MARGIN edge; now the canvas origin grows to fit it.
 	await page.mouse.move(box.x + 12, box.y + 10)
 	await page.mouse.down()
 	await page.mouse.move(box.x + 12, box.y + 10 - 200, { steps: 12 })
 	await page.mouse.up()
 
-	// Previously the window clamped at the content origin after ~24px of travel;
-	// now it follows the pointer up into the surrounding pan margin.
-	const after = await translateY()
-	expect(before - after).toBeGreaterThan(100)
+	// The window stayed glued to the pointer on screen as it moved up.
+	const screenAfter = (await header.boundingBox())?.y
+	if (screenAfter === undefined) {
+		throw new Error('Expected header bounding box after drag')
+	}
+	expect(screenBefore - screenAfter).toBeGreaterThan(100)
+
+	// And the workspace adapted: its scrollable canvas grew taller to make room for
+	// the window's new position above the rest of the cluster.
+	const scrollHeightAfter = await workspace.evaluate((element) => element.scrollHeight)
+	expect(scrollHeightAfter).toBeGreaterThan(scrollHeightBefore + 100)
 })

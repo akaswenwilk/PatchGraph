@@ -320,6 +320,8 @@ function TreeBranch({
 function Minimap({
 	canvasWidth,
 	canvasHeight,
+	offsetX,
+	offsetY,
 	zoom,
 	openFiles,
 	activeWindowID,
@@ -328,6 +330,8 @@ function Minimap({
 }: {
 	canvasWidth: number
 	canvasHeight: number
+	offsetX: number
+	offsetY: number
 	zoom: number
 	openFiles: OpenFile[]
 	activeWindowID: string | null
@@ -406,8 +410,8 @@ function Minimap({
 									: 'minimap-window'
 							}
 							style={{
-								left: `${(fileWindow.x + PAN_MARGIN) * scale}px`,
-								top: `${(fileWindow.y + PAN_MARGIN) * scale}px`,
+								left: `${(fileWindow.x + offsetX) * scale}px`,
+								top: `${(fileWindow.y + offsetY) * scale}px`,
 								width: `${(fileWindow.width ?? DEFAULT_WINDOW_WIDTH) * scale}px`,
 								height: `${(fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) * scale}px`,
 							}}
@@ -469,6 +473,12 @@ function App() {
 	// Mirror of `zoom` for the imperative pointer/wheel handlers, which run
 	// outside React's render and must read the live scale.
 	const zoomRef = useRef(1)
+	// Live mirror of the canvas origin offset (PAN_MARGIN grown by however far the
+	// top-left-most window sits into negative space). The imperative drag handlers
+	// read these to map pointer positions to logical window coordinates, and the
+	// scroll-compensation layout effect keeps them in sync with each render.
+	const offsetXRef = useRef(PAN_MARGIN)
+	const offsetYRef = useRef(PAN_MARGIN)
 	// Scroll offset to apply after a zoom change so the canvas point under the
 	// cursor stays put (zoom-to-cursor). Consumed in a layout effect.
 	const pendingScrollRef = useRef<{ left: number; top: number } | null>(null)
@@ -1157,8 +1167,8 @@ function App() {
 		dragStateRef.current = {
 			windowID,
 			pointerID: event.pointerId,
-			grabOffsetX: pointerCanvasX - moving.x - PAN_MARGIN,
-			grabOffsetY: pointerCanvasY - moving.y - PAN_MARGIN,
+			grabOffsetX: pointerCanvasX - moving.x - offsetXRef.current,
+			grabOffsetY: pointerCanvasY - moving.y - offsetYRef.current,
 			lastClientX: event.clientX,
 			lastClientY: event.clientY,
 			autoScrollFrame: null,
@@ -1182,12 +1192,14 @@ function App() {
 		const rect = workspace.getBoundingClientRect()
 		const pointerCanvasX = (drag.lastClientX - rect.left + workspace.scrollLeft) / zoomRef.current
 		const pointerCanvasY = (drag.lastClientY - rect.top + workspace.scrollTop) / zoomRef.current
-		// Allow dragging up/left into the surrounding pan margin (down to
-		// -PAN_MARGIN, where the window sits at the canvas edge), not just to the
-		// content origin. The lower bound keeps it within the scrollable canvas so
-		// the fixed render offset never needs to reflow mid-drag.
-		const nextX = Math.max(-PAN_MARGIN, pointerCanvasX - drag.grabOffsetX - PAN_MARGIN)
-		const nextY = Math.max(-PAN_MARGIN, pointerCanvasY - drag.grabOffsetY - PAN_MARGIN)
+		// No clamp: a window can be dragged arbitrarily far in any direction. When it
+		// crosses the current top/left edge the canvas origin grows to fit it (see the
+		// scroll-compensation effect), so the position stays valid. Subtracting the
+		// live origin offset maps the rendered pointer position back to logical
+		// window coordinates; pairing it with the live scrollLeft keeps the result
+		// invariant across the origin shift, so the window stays glued to the pointer.
+		const nextX = pointerCanvasX - drag.grabOffsetX - offsetXRef.current
+		const nextY = pointerCanvasY - drag.grabOffsetY - offsetYRef.current
 		setOpenFiles((current) =>
 			current.map((fileWindow) =>
 				fileWindow.id === drag.windowID ? { ...fileWindow, x: nextX, y: nextY } : fileWindow,
@@ -1281,18 +1293,46 @@ function App() {
 		})
 	}
 
-	// Content extent (furthest window edges), then pad with PAN_MARGIN on every
-	// side: left/top via the per-window render offset, right/bottom via these sizes.
-	const contentWidth = openFiles.reduce(
+	// Bounding box of every window, then pad with PAN_MARGIN on all four sides so
+	// there is always pannable empty space around the cluster. Unlike a fixed
+	// origin, the left/top edge tracks the most negative window (floored at 0 so a
+	// normal cluster keeps the usual PAN_MARGIN of left/top space). This lets a
+	// window be dragged outward in any direction forever — the canvas just grows to
+	// fit, and `offsetX/offsetY` shift the whole cluster to keep it on-canvas.
+	const minX = openFiles.reduce((min, fileWindow) => Math.min(min, fileWindow.x), 0)
+	const minY = openFiles.reduce((min, fileWindow) => Math.min(min, fileWindow.y), 0)
+	const maxX = openFiles.reduce(
 		(max, fileWindow) => Math.max(max, fileWindow.x + (fileWindow.width ?? DEFAULT_WINDOW_WIDTH)),
 		0,
 	)
-	const contentHeight = openFiles.reduce(
+	const maxY = openFiles.reduce(
 		(max, fileWindow) => Math.max(max, fileWindow.y + (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT)),
 		0,
 	)
-	const canvasWidth = contentWidth + PAN_MARGIN * 2
-	const canvasHeight = contentHeight + PAN_MARGIN * 2
+	const offsetX = PAN_MARGIN - minX
+	const offsetY = PAN_MARGIN - minY
+	const canvasWidth = maxX - minX + PAN_MARGIN * 2
+	const canvasHeight = maxY - minY + PAN_MARGIN * 2
+
+	// When the origin shifts (a window crossed the current top/left edge, growing
+	// the canvas), every window's render offset changes by the same delta. Bump the
+	// scroll position by that delta so nothing appears to jump and the window under
+	// the pointer stays glued to it. Runs before paint to avoid a visible flash.
+	useLayoutEffect(() => {
+		const workspace = workspaceRef.current
+		if (workspace !== null) {
+			const dx = offsetX - offsetXRef.current
+			const dy = offsetY - offsetYRef.current
+			if (dx !== 0) {
+				workspace.scrollLeft += dx * zoomRef.current
+			}
+			if (dy !== 0) {
+				workspace.scrollTop += dy * zoomRef.current
+			}
+		}
+		offsetXRef.current = offsetX
+		offsetYRef.current = offsetY
+	}, [offsetX, offsetY])
 
 	return (
 		<div className="app-shell">
@@ -1406,7 +1446,7 @@ function App() {
 								style={{
 									width: (fileWindow.width ?? DEFAULT_WINDOW_WIDTH) + 'px',
 									height: (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) + 'px',
-									transform: `translate(${fileWindow.x + PAN_MARGIN}px, ${fileWindow.y + PAN_MARGIN}px)`,
+									transform: `translate(${fileWindow.x + offsetX}px, ${fileWindow.y + offsetY}px)`,
 									zIndex: fileWindow.zIndex,
 								}}
 								onPointerDown={() => focusFileWindow(fileWindow.id)}
@@ -1512,6 +1552,8 @@ function App() {
 				<Minimap
 					canvasWidth={canvasWidth}
 					canvasHeight={canvasHeight}
+					offsetX={offsetX}
+					offsetY={offsetY}
 					zoom={zoom}
 					openFiles={openFiles}
 					activeWindowID={activeWindowID}
