@@ -22,76 +22,13 @@ function parseBranches(data: unknown): Branch[] {
 	return data
 }
 
-// A node in the branch tree. Branch names are split on "/" so e.g.
-// "feature/login" and "feature/signup" nest under a shared "feature" folder.
-// A leaf carries its full branch; a folder only groups children.
-type BranchNode = {
-	name: string
-	path: string
-	branch: Branch | null
-	children: BranchNode[]
-}
-
-function buildBranchTree(branches: Branch[]): BranchNode {
-	const root: BranchNode = { name: '', path: '', branch: null, children: [] }
-
-	for (const branch of branches) {
-		const segments = branch.name.split('/').filter(Boolean)
-		let current = root
-
-		for (let index = 0; index < segments.length; index += 1) {
-			const segment = segments[index]
-			const nodePath = current.path === '' ? segment : `${current.path}/${segment}`
-			const isLeaf = index === segments.length - 1
-			let child = current.children.find((entry) => entry.path === nodePath)
-
-			if (!child) {
-				child = { name: segment, path: nodePath, branch: null, children: [] }
-				current.children.push(child)
-			}
-			if (isLeaf) {
-				child.branch = branch
-			}
-
-			current = child
-		}
-	}
-
-	const sortNode = (node: BranchNode) => {
-		node.children.sort((left, right) => {
-			const leftIsFolder = left.children.length > 0
-			const rightIsFolder = right.children.length > 0
-			if (leftIsFolder !== rightIsFolder) {
-				return leftIsFolder ? -1 : 1
-			}
-			return left.name.localeCompare(right.name)
-		})
-		for (const child of node.children) {
-			sortNode(child)
-		}
-	}
-
-	sortNode(root)
-	return root
-}
-
-// Number of leaf branches under a node, so a folder can collapse the whole
-// subtree and still hint how many branches it holds.
-function countBranches(node: BranchNode): number {
-	let total = node.branch !== null ? 1 : 0
-	for (const child of node.children) {
-		total += countBranches(child)
-	}
-	return total
-}
-
 type BranchActionRequest =
 	| { action: 'checkout'; branch: string }
 	| { action: 'delete'; branch: string }
 	| { action: 'create'; name: string; base: string }
 	| { action: 'merge'; source: string; target: string }
 
-// Pending interaction overlaid on the tree: naming a new branch forked from
+// Pending interaction overlaid on the list: naming a new branch forked from
 // `base`, or picking the target a `source` branch should merge into.
 type PendingAction =
 	| { kind: 'create'; base: string; name: string }
@@ -100,7 +37,7 @@ type PendingAction =
 
 type LoadState = 'loading' | 'ready' | 'error'
 
-// The git branch menu: a modal showing the project's local branches as a tree.
+// The git branch menu: a modal showing the project's local branches as a flat list.
 // Selecting a branch checks it out; branches can also be created off any branch,
 // deleted, and merged into one another. Git failures (uncommitted changes, an
 // unmerged branch, a merge conflict) surface inline with git's own message.
@@ -121,7 +58,6 @@ export function GitMenu({
 	const [actionError, setActionError] = useState('')
 	const [notice, setNotice] = useState('')
 	const [busy, setBusy] = useState(false)
-	const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 	const [pending, setPending] = useState<PendingAction>(null)
 
 	useEffect(() => {
@@ -158,7 +94,10 @@ export function GitMenu({
 		}
 	}, [projectID])
 
-	const tree = useMemo(() => buildBranchTree(branches), [branches])
+	const sortedBranches = useMemo(
+		() => [...branches].sort((left, right) => left.name.localeCompare(right.name)),
+		[branches],
+	)
 
 	// Sends a branch action; on success returns the refreshed branch list, on a
 	// git failure throws an Error carrying git's message for inline display.
@@ -262,18 +201,6 @@ export function GitMenu({
 		)
 	}
 
-	function toggleFolder(path: string) {
-		setCollapsed((previous) => {
-			const next = new Set(previous)
-			if (next.has(path)) {
-				next.delete(path)
-			} else {
-				next.add(path)
-			}
-			return next
-		})
-	}
-
 	const mergeSource = pending?.kind === 'merge' ? pending.source : null
 
 	return (
@@ -314,18 +241,15 @@ export function GitMenu({
 				{loadState === 'ready' && branches.length === 0 ? (
 					<p className="project-status">No branches found.</p>
 				) : null}
-				{loadState === 'ready' && branches.length > 0 ? (
-					<ul className="git-tree" role="tree" aria-label="Branches">
-						{tree.children.map((node) => (
-							<BranchBranch
-								key={node.path}
-								node={node}
-								depth={0}
-								collapsed={collapsed}
+				{loadState === 'ready' && sortedBranches.length > 0 ? (
+					<ul className="git-branch-list" role="list" aria-label="Branches">
+						{sortedBranches.map((branch) => (
+							<BranchRow
+								key={branch.name}
+								branch={branch}
 								busy={busy}
 								mergeSource={mergeSource}
 								pending={pending}
-								onToggleFolder={toggleFolder}
 								onCheckout={handleCheckout}
 								onDelete={handleDelete}
 								onStartCreate={(base) => {
@@ -355,14 +279,11 @@ export function GitMenu({
 	)
 }
 
-function BranchBranch({
-	node,
-	depth,
-	collapsed,
+function BranchRow({
+	branch,
 	busy,
 	mergeSource,
 	pending,
-	onToggleFolder,
 	onCheckout,
 	onDelete,
 	onStartCreate,
@@ -372,13 +293,10 @@ function BranchBranch({
 	onCreateSubmit,
 	onCreateCancel,
 }: {
-	node: BranchNode
-	depth: number
-	collapsed: Set<string>
+	branch: Branch
 	busy: boolean
 	mergeSource: string | null
 	pending: PendingAction
-	onToggleFolder: (path: string) => void
 	onCheckout: (branch: Branch) => void
 	onDelete: (branch: Branch) => void
 	onStartCreate: (base: string) => void
@@ -388,54 +306,6 @@ function BranchBranch({
 	onCreateSubmit: () => void
 	onCreateCancel: () => void
 }) {
-	const indent = depth * 16 + 12
-	const isFolder = node.branch === null
-
-	if (isFolder) {
-		const isOpen = !collapsed.has(node.path)
-		return (
-			<li className="git-tree-item" role="treeitem" aria-expanded={isOpen}>
-				<button
-					type="button"
-					className="git-row git-folder"
-					style={{ paddingLeft: `${indent}px` }}
-					onClick={() => onToggleFolder(node.path)}
-				>
-					<span className="git-folder-caret" aria-hidden="true">
-						{isOpen ? '▾' : '▸'}
-					</span>
-					<span className="git-label">{node.name}</span>
-					<span className="git-folder-count">{countBranches(node)}</span>
-				</button>
-				{isOpen && node.children.length > 0 ? (
-					<ul className="git-tree">
-						{node.children.map((child) => (
-							<BranchBranch
-								key={child.path}
-								node={child}
-								depth={depth + 1}
-								collapsed={collapsed}
-								busy={busy}
-								mergeSource={mergeSource}
-								pending={pending}
-								onToggleFolder={onToggleFolder}
-								onCheckout={onCheckout}
-								onDelete={onDelete}
-								onStartCreate={onStartCreate}
-								onStartMerge={onStartMerge}
-								onMergeTarget={onMergeTarget}
-								onCreateNameChange={onCreateNameChange}
-								onCreateSubmit={onCreateSubmit}
-								onCreateCancel={onCreateCancel}
-							/>
-						))}
-					</ul>
-				) : null}
-			</li>
-		)
-	}
-
-	const branch = node.branch as Branch
 	const isMergeTargetMode = mergeSource !== null
 	const isMergeSource = mergeSource === branch.name
 	const isCreatingHere = pending?.kind === 'create' && pending.base === branch.name
@@ -452,12 +322,11 @@ function BranchBranch({
 	}
 
 	return (
-		<li className="git-tree-item" role="treeitem" aria-selected={branch.isCurrent}>
+		<li className="git-branch-list-item" aria-current={branch.isCurrent ? 'true' : undefined}>
 			<div
 				className={
 					branch.isCurrent ? 'git-row git-branch git-branch-current' : 'git-row git-branch'
 				}
-				style={{ paddingLeft: `${indent}px` }}
 			>
 				<button
 					type="button"
@@ -477,7 +346,7 @@ function BranchBranch({
 					<span className="git-branch-icon" aria-hidden="true">
 						{branch.isCurrent ? '●' : '○'}
 					</span>
-					<span className="git-label">{node.name}</span>
+					<span className="git-label">{branch.name}</span>
 					{branch.isCurrent ? <span className="git-current-badge">current</span> : null}
 				</button>
 
@@ -519,7 +388,6 @@ function BranchBranch({
 			{isCreatingHere ? (
 				<form
 					className="git-create-form"
-					style={{ paddingLeft: `${indent + 22}px` }}
 					onSubmit={(event) => {
 						event.preventDefault()
 						onCreateSubmit()
