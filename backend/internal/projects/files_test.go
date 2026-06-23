@@ -87,6 +87,73 @@ func TestReadLinesHandlesEmptyFinalLine(t *testing.T) {
 	}
 }
 
+func TestSearchTextFindsMatchesAcrossTrackedAndUntrackedFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for this test")
+	}
+
+	repoPath := filepath.Join(t.TempDir(), "PatchGraph")
+	runGit(t, repoPath, "init", "-q")
+	writeFile(t, filepath.Join(repoPath, ".gitignore"), "ignored/\n")
+	writeFile(t, filepath.Join(repoPath, "tracked.go"), "package main\n\nfunc Needle() {}\n")
+	writeFile(t, filepath.Join(repoPath, "untracked.go"), "// needle lives here too\n")
+	writeFile(t, filepath.Join(repoPath, "ignored", "secret.go"), "var needle = 1\n")
+	runGit(t, repoPath, "add", ".gitignore", "tracked.go")
+
+	root := filepath.Dir(repoPath)
+	matches, err := SearchText(root, projectID(repoPath), "needle")
+	if err != nil {
+		t.Fatalf("SearchText() error = %v", err)
+	}
+
+	// Case-insensitive across tracked and non-ignored untracked files; the
+	// gitignored file is excluded, matching the explorer's file set.
+	want := []SearchMatch{
+		{Filename: "tracked.go", Line: 3, Text: "func Needle() {}"},
+		{Filename: "untracked.go", Line: 1, Text: "// needle lives here too"},
+	}
+	slices.SortFunc(matches, func(a, b SearchMatch) int {
+		return strings.Compare(a.Filename, b.Filename)
+	})
+	if !reflect.DeepEqual(matches, want) {
+		t.Fatalf("matches = %#v, want %#v", matches, want)
+	}
+}
+
+func TestSearchTextEmptyQueryReturnsNoMatches(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "PatchGraph")
+	createRepoGitDir(t, repoPath)
+
+	root := filepath.Dir(repoPath)
+	matches, err := SearchText(root, projectID(repoPath), "   ")
+	if err != nil {
+		t.Fatalf("SearchText() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches = %#v, want empty", matches)
+	}
+}
+
+func TestSearchTextNoMatchesIsNotAnError(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for this test")
+	}
+
+	repoPath := filepath.Join(t.TempDir(), "PatchGraph")
+	runGit(t, repoPath, "init", "-q")
+	writeFile(t, filepath.Join(repoPath, "file.go"), "package main\n")
+	runGit(t, repoPath, "add", "file.go")
+
+	root := filepath.Dir(repoPath)
+	matches, err := SearchText(root, projectID(repoPath), "zzznotpresent")
+	if err != nil {
+		t.Fatalf("SearchText() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches = %#v, want empty", matches)
+	}
+}
+
 func runGit(t *testing.T, repoPath string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", repoPath}, args...)...)

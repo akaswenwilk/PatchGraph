@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +17,21 @@ var (
 	ErrInvalidFilePath    = errors.New("invalid file path")
 	ErrFileOutsideProject = errors.New("file path escapes project root")
 )
+
+// SearchMatch is a single line in a project file that contains the query text.
+type SearchMatch struct {
+	Filename string `json:"filename"`
+	Line     int    `json:"line"`
+	Text     string `json:"text"`
+}
+
+// maxSearchMatches caps how many matches a single text search returns so a
+// broad query against a large repo cannot flood the response or the UI.
+const maxSearchMatches = 200
+
+// maxSearchTextLen truncates each returned line so a single very long line
+// (e.g. minified code) does not bloat the payload.
+const maxSearchTextLen = 400
 
 type Detail struct {
 	ID    string   `json:"id"`
@@ -126,6 +142,92 @@ func ListFiles(project Project) ([]string, error) {
 
 	slices.Sort(files)
 	return files, nil
+}
+
+// SearchText runs a case-insensitive, fixed-string search for query across the
+// same files the explorer lists (tracked plus non-ignored untracked) using
+// `git grep`, returning up to maxSearchMatches matching lines. An empty query
+// (or one with no matches) yields an empty slice, not an error.
+func SearchText(root, projectID, query string) ([]SearchMatch, error) {
+	project, err := FindByID(root, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return []SearchMatch{}, nil
+	}
+
+	// Mark the directory safe per-invocation with -c rather than mutating the
+	// global git config (mirrors ListFiles, avoiding the global config lock).
+	// -z separates the filename, line number, and text with NUL so colons in
+	// any field don't break parsing; --untracked matches the explorer's file
+	// set; -I skips binary files; -F -i make it a case-insensitive literal.
+	command := exec.Command(
+		"git",
+		"-c", "safe.directory="+project.AbsolutePath(),
+		"-C", project.AbsolutePath(),
+		"grep",
+		"--no-color",
+		"-z",
+		"-n",
+		"-I",
+		"--untracked",
+		"-i",
+		"-F",
+		"-e", trimmed,
+		"--",
+	)
+
+	output, err := command.Output()
+	if err != nil {
+		// git grep exits 1 when there are simply no matches; that is not an error.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return []SearchMatch{}, nil
+		}
+		return nil, err
+	}
+
+	return parseGrepMatches(output), nil
+}
+
+// parseGrepMatches decodes `git grep -z -n` output into matches. Each record is
+// newline-terminated and holds NUL-separated filename, line number, and text.
+func parseGrepMatches(output []byte) []SearchMatch {
+	matches := make([]SearchMatch, 0)
+	for _, record := range bytes.Split(output, []byte{'\n'}) {
+		if len(record) == 0 {
+			continue
+		}
+
+		fields := bytes.SplitN(record, []byte{0}, 3)
+		if len(fields) != 3 {
+			continue
+		}
+
+		line, err := strconv.Atoi(string(fields[1]))
+		if err != nil {
+			continue
+		}
+
+		text := string(fields[2])
+		if len(text) > maxSearchTextLen {
+			text = text[:maxSearchTextLen]
+		}
+
+		matches = append(matches, SearchMatch{
+			Filename: string(fields[0]),
+			Line:     line,
+			Text:     text,
+		})
+		if len(matches) >= maxSearchMatches {
+			break
+		}
+	}
+
+	return matches
 }
 
 func normalizeRelativeFilePath(filename string) (string, error) {
