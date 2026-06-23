@@ -8,7 +8,7 @@ async function openProject(page: Page, projectName: RegExp): Promise<void> {
 	await projectDialog.getByRole('button', { name: 'Open', exact: true }).click()
 }
 
-test('git menu lists branches as a tree and creates then deletes a branch', async ({ page }) => {
+test('git menu lists branches flat and creates then deletes a branch', async ({ page }) => {
 	await page.goto('/')
 	await openProject(page, /PatchGraph\s+PatchGraph$/)
 	await expect(page.getByText('base.txt')).toBeVisible()
@@ -17,28 +17,28 @@ test('git menu lists branches as a tree and creates then deletes a branch', asyn
 	const gitDialog = page.getByRole('dialog', { name: 'Git branches' })
 	await expect(gitDialog).toBeVisible()
 
-	// The seeded repo has feature/worktree-switch, so the tree nests it under a
-	// "feature" folder.
-	await expect(gitDialog.getByText('feature', { exact: true })).toBeVisible()
-	await expect(gitDialog.getByText('worktree-switch')).toBeVisible()
+	// Slash-separated branch names should render as complete branch names, not
+	// nested folders.
+	await expect(gitDialog.getByText('feature/worktree-switch', { exact: true })).toBeVisible()
+	await expect(gitDialog.getByText('feature', { exact: true })).toHaveCount(0)
 
 	// Create a branch off the feature branch; it must appear without switching.
-	const featureLeaf = gitDialog.getByRole('treeitem').filter({ hasText: 'worktree-switch' }).first()
+	const featureLeaf = gitDialog.getByRole('listitem').filter({ hasText: 'feature/worktree-switch' }).first()
 	await featureLeaf.getByRole('button', { name: 'New' }).click()
 	await gitDialog.getByPlaceholder(/New branch off feature\/worktree-switch/).fill('qa/playground')
 	await gitDialog.getByRole('button', { name: 'Create', exact: true }).click()
 
 	await expect(gitDialog.getByText(/Created qa\/playground/)).toBeVisible()
-	const qaLeaf = gitDialog.getByRole('treeitem').filter({ hasText: 'playground' }).first()
+	const qaLeaf = gitDialog.getByRole('listitem').filter({ hasText: 'qa/playground' }).first()
 	await expect(qaLeaf).toBeVisible()
 
-	// Delete it again and confirm it disappears from the tree. Scope the absence
-	// check to tree items so the "Deleted …" notice (which also contains the
+	// Delete it again and confirm it disappears from the list. Scope the absence
+	// check to list items so the "Deleted …" notice (which also contains the
 	// branch name) does not keep the assertion alive.
 	await qaLeaf.getByRole('button', { name: 'Delete' }).click()
 
 	await expect(gitDialog.getByText(/Deleted qa\/playground/)).toBeVisible()
-	await expect(gitDialog.getByRole('treeitem').filter({ hasText: 'playground' })).toHaveCount(0)
+	await expect(gitDialog.getByRole('listitem').filter({ hasText: 'qa/playground' })).toHaveCount(0)
 })
 
 test('git menu surfaces a git error when deleting the current branch', async ({ page }) => {
@@ -52,6 +52,6 @@ test('git menu surfaces a git error when deleting the current branch', async ({ 
 
 	// The current branch is marked and its Delete button is disabled, so trying to
 	// remove it is prevented up front.
-	const currentLeaf = gitDialog.getByRole('treeitem').filter({ hasText: 'current' }).first()
+	const currentLeaf = gitDialog.getByRole('listitem').filter({ hasText: 'current' }).first()
 	await expect(currentLeaf.getByRole('button', { name: 'Delete' })).toBeDisabled()
 })
