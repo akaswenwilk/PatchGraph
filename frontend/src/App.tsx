@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
 import { CodeView } from './CodeView'
 import { FuzzyFileSearch, TextSearch } from './SearchPalette'
+import { GitMenu } from './GitMenu'
 import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
 import { ConnectionsOverlay } from './Connections'
 import {
@@ -441,9 +442,9 @@ function Minimap({
 function App() {
 	const [isCollapsed, setIsCollapsed] = useState(false)
 	const [isModalOpen, setIsModalOpen] = useState(false)
-	// Which search palette is open over the canvas, if any: fuzzy file finder or
-	// global text search. null when neither is shown.
-	const [searchMode, setSearchMode] = useState<'file' | 'text' | null>(null)
+	// Which overlay is open over the canvas, if any: fuzzy file finder, global
+	// text search, or the git branch menu. null when none is shown.
+	const [searchMode, setSearchMode] = useState<'file' | 'text' | 'git' | null>(null)
 	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
 	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
@@ -551,6 +552,9 @@ function App() {
 			} else if (!event.shiftKey && (event.key === 'P' || event.key === 'p')) {
 				event.preventDefault()
 				setSearchMode('file')
+			} else if (!event.shiftKey && (event.key === 'B' || event.key === 'b')) {
+				event.preventDefault()
+				setSearchMode('git')
 			}
 		}
 
@@ -842,6 +846,38 @@ function App() {
 			setExpandedPaths(new Set())
 			setProjectState('error')
 			setProjectError(error instanceof Error ? error.message : 'Unknown error')
+		}
+	}
+
+	// Re-fetch the active project's file list after a git action changed the
+	// working tree (checkout/merge). Open windows, zoom, and expanded folders are
+	// left untouched so the canvas stays put; only the explorer tree refreshes.
+	async function reloadActiveProject() {
+		if (activeProject === null) {
+			return
+		}
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}`)
+			if (!response.ok) {
+				throw new Error(`Request failed with status ${response.status}`)
+			}
+
+			const data: unknown = await response.json()
+			if (!isProjectDetail(data)) {
+				throw new Error('Project response was invalid')
+			}
+
+			const project = {
+				...data,
+				files: [...data.files].sort((left, right) => left.localeCompare(right)),
+			}
+			setActiveProject(project)
+			setFileTree(buildTree(project.files))
+			setProjectState('ready')
+		} catch (error) {
+			setProjectError(error instanceof Error ? error.message : 'Unknown error')
+			setProjectState('error')
 		}
 	}
 
@@ -1454,6 +1490,15 @@ function App() {
 										<span className="explorer-search-icon" aria-hidden="true">⌕</span>
 										Search text
 									</button>
+									<button
+										type="button"
+										className="explorer-search-button"
+										onClick={() => setSearchMode('git')}
+										title="Git branches (Ctrl/Cmd+B)"
+									>
+										<span className="explorer-search-icon" aria-hidden="true">⎇</span>
+										Git
+									</button>
 								</div>
 							) : null}
 
@@ -1748,6 +1793,14 @@ function App() {
 					projectID={activeProject.id}
 					onOpen={(filename, line) => openFileAtLine(filename, line)}
 					onClose={() => setSearchMode(null)}
+				/>
+			) : null}
+
+			{searchMode === 'git' && activeProject !== null ? (
+				<GitMenu
+					projectID={activeProject.id}
+					onClose={() => setSearchMode(null)}
+					onWorkingTreeChanged={() => void reloadActiveProject()}
 				/>
 			) : null}
 		</div>
