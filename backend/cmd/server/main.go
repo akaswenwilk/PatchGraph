@@ -56,7 +56,7 @@ func start(args []string) error {
 
 	server := &http.Server{
 		Addr:    ":" + *port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler, lspHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, searchHandler, lspHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -126,6 +126,15 @@ func fileHandler(projectID string, filename string) ([]string, error) {
 	return projects.ReadFileLines(root, projectID, filename)
 }
 
+func searchHandler(projectID string, query string) ([]projects.SearchMatch, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return projects.SearchText(root, projectID, query)
+}
+
 // lspDefaultTimeout bounds a single LSP analysis. Cold language server startup
 // and indexing can be slow, so it is generous.
 const lspDefaultTimeout = 90 * time.Second
@@ -156,6 +165,7 @@ func newMux(
 	listProjects func() ([]projects.Project, error),
 	getProject func(string) (projects.Detail, error),
 	readFile func(string, string) ([]string, error),
+	searchText func(string, string) ([]projects.SearchMatch, error),
 	analyzeFile func(string, string) (lsp.FileAnalysis, error),
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -187,12 +197,14 @@ func newMux(
 			writeProjectResponse(w, projectID, getProject)
 		case remainder == "files" && r.Method == http.MethodPost:
 			writeFileResponse(w, r, projectID, readFile)
+		case remainder == "search" && r.Method == http.MethodPost:
+			writeSearchResponse(w, r, projectID, searchText)
 		case remainder == "lsp" && r.Method == http.MethodPost:
 			writeLSPResponse(w, r, projectID, analyzeFile)
 		case remainder == "":
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		case remainder == "files", remainder == "lsp":
+		case remainder == "files", remainder == "search", remainder == "lsp":
 			w.Header().Set("Allow", http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		default:
@@ -251,6 +263,32 @@ func writeFileResponse(
 	writeJSON(w, lines)
 }
 
+func writeSearchResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID string,
+	searchText func(string, string) ([]projects.SearchMatch, error),
+) {
+	query, ok := decodeQueryRequest(w, r)
+	if !ok {
+		return
+	}
+
+	matches, err := searchText(projectID, query)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			http.Error(w, "project not found", http.StatusNotFound)
+			return
+		}
+
+		log.Printf("failed to search project %s: %v", projectID, err)
+		http.Error(w, "failed to search project", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, matches)
+}
+
 func writeLSPResponse(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -304,6 +342,29 @@ func decodeFilenameRequest(w http.ResponseWriter, r *http.Request) (string, bool
 	}
 
 	return request.Filename, true
+}
+
+// decodeQueryRequest reads the {"query": "..."} POST body used by text search.
+// On a malformed body it writes a 400 response and returns ok=false.
+func decodeQueryRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+	defer r.Body.Close()
+
+	var request struct {
+		Query string `json:"query"`
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return "", false
+	}
+	if err := decoder.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return "", false
+	}
+
+	return request.Query, true
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
 import { CodeView } from './CodeView'
+import { FuzzyFileSearch, TextSearch } from './SearchPalette'
 import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
 import { ConnectionsOverlay } from './Connections'
 import {
@@ -440,6 +441,9 @@ function Minimap({
 function App() {
 	const [isCollapsed, setIsCollapsed] = useState(false)
 	const [isModalOpen, setIsModalOpen] = useState(false)
+	// Which search palette is open over the canvas, if any: fuzzy file finder or
+	// global text search. null when neither is shown.
+	const [searchMode, setSearchMode] = useState<'file' | 'text' | null>(null)
 	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
 	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
@@ -526,6 +530,33 @@ function App() {
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
 	}, [isModalOpen])
+
+	// Global search shortcuts, available once a repo is open: Ctrl/Cmd+P opens the
+	// fuzzy file finder, Ctrl/Cmd+Shift+F opens the global text search. Both are
+	// no-ops without an active project.
+	useEffect(() => {
+		if (activeProject === null) {
+			return
+		}
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			const mod = event.metaKey || event.ctrlKey
+			if (!mod) {
+				return
+			}
+
+			if (event.shiftKey && (event.key === 'F' || event.key === 'f')) {
+				event.preventDefault()
+				setSearchMode('text')
+			} else if (!event.shiftKey && (event.key === 'P' || event.key === 'p')) {
+				event.preventDefault()
+				setSearchMode('file')
+			}
+		}
+
+		window.addEventListener('keydown', handleKeyDown)
+		return () => window.removeEventListener('keydown', handleKeyDown)
+	}, [activeProject])
 
 	// Dismiss the help popover on Escape or a click outside it.
 	useEffect(() => {
@@ -909,6 +940,25 @@ function App() {
 		setActiveWindowID(pendingWindow.id)
 
 		// Contents and language-server info load in parallel; neither blocks the other.
+		void loadFileContents(activeProject.id, filename, pendingWindow.id)
+		void loadLspInfo(activeProject.id, filename, pendingWindow.id)
+	}
+
+	// Opens a file in a new window scrolled to and highlighting a line, used by
+	// the global text search results. `line` is 1-based (as returned by the search
+	// endpoint); focusLine is zero-based.
+	function openFileAtLine(filename: string, line: number) {
+		if (activeProject === null) {
+			return
+		}
+
+		const pendingWindow = {
+			...createWindow(filename),
+			focusLine: Math.max(0, line - 1),
+		}
+		setOpenFiles((current) => [...current, pendingWindow])
+		setActiveWindowID(pendingWindow.id)
+
 		void loadFileContents(activeProject.id, filename, pendingWindow.id)
 		void loadLspInfo(activeProject.id, filename, pendingWindow.id)
 	}
@@ -1384,6 +1434,29 @@ function App() {
 								</div>
 							</div>
 
+							{activeProject !== null ? (
+								<div className="explorer-search-actions">
+									<button
+										type="button"
+										className="explorer-search-button"
+										onClick={() => setSearchMode('file')}
+										title="Find file (Ctrl/Cmd+P)"
+									>
+										<span className="explorer-search-icon" aria-hidden="true">⌕</span>
+										Find file
+									</button>
+									<button
+										type="button"
+										className="explorer-search-button"
+										onClick={() => setSearchMode('text')}
+										title="Search in files (Ctrl/Cmd+Shift+F)"
+									>
+										<span className="explorer-search-icon" aria-hidden="true">⌕</span>
+										Search text
+									</button>
+								</div>
+							) : null}
+
 							<div className="explorer-tree-panel">
 								{projectState === 'idle' ? (
 									<p className="project-status">Open a repo to load files.</p>
@@ -1660,6 +1733,22 @@ function App() {
 						</div>
 					</section>
 				</div>
+			) : null}
+
+			{searchMode === 'file' && activeProject !== null ? (
+				<FuzzyFileSearch
+					files={activeProject.files}
+					onOpen={(filename) => handleFileOpen(filename)}
+					onClose={() => setSearchMode(null)}
+				/>
+			) : null}
+
+			{searchMode === 'text' && activeProject !== null ? (
+				<TextSearch
+					projectID={activeProject.id}
+					onOpen={(filename, line) => openFileAtLine(filename, line)}
+					onClose={() => setSearchMode(null)}
+				/>
 			) : null}
 		</div>
 	)
