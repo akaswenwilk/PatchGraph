@@ -56,7 +56,7 @@ func start(args []string) error {
 
 	server := &http.Server{
 		Addr:    ":" + *port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler, searchHandler, lspHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, searchHandler, lspHandler, branchesHandler, branchActionHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -135,6 +135,24 @@ func searchHandler(projectID string, query string) ([]projects.SearchMatch, erro
 	return projects.SearchText(root, projectID, query)
 }
 
+func branchesHandler(projectID string) ([]projects.Branch, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return projects.ListBranches(root, projectID)
+}
+
+func branchActionHandler(projectID string, action projects.BranchAction) ([]projects.Branch, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return projects.PerformBranchAction(root, projectID, action)
+}
+
 // lspDefaultTimeout bounds a single LSP analysis. Cold language server startup
 // and indexing can be slow, so it is generous.
 const lspDefaultTimeout = 90 * time.Second
@@ -167,6 +185,8 @@ func newMux(
 	readFile func(string, string) ([]string, error),
 	searchText func(string, string) ([]projects.SearchMatch, error),
 	analyzeFile func(string, string) (lsp.FileAnalysis, error),
+	listBranches func(string) ([]projects.Branch, error),
+	branchAction func(string, projects.BranchAction) ([]projects.Branch, error),
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -201,11 +221,18 @@ func newMux(
 			writeSearchResponse(w, r, projectID, searchText)
 		case remainder == "lsp" && r.Method == http.MethodPost:
 			writeLSPResponse(w, r, projectID, analyzeFile)
+		case remainder == "branches" && r.Method == http.MethodGet:
+			writeBranchesResponse(w, projectID, listBranches)
+		case remainder == "branches" && r.Method == http.MethodPost:
+			writeBranchActionResponse(w, r, projectID, branchAction)
 		case remainder == "":
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		case remainder == "files", remainder == "search", remainder == "lsp":
 			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		case remainder == "branches":
+			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		default:
 			http.NotFound(w, r)
@@ -289,6 +316,67 @@ func writeSearchResponse(
 	writeJSON(w, matches)
 }
 
+func writeBranchesResponse(
+	w http.ResponseWriter,
+	projectID string,
+	listBranches func(string) ([]projects.Branch, error),
+) {
+	branches, err := listBranches(projectID)
+	if err != nil {
+		writeBranchError(w, projectID, err, "failed to list branches")
+		return
+	}
+
+	writeJSON(w, branches)
+}
+
+func writeBranchActionResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID string,
+	branchAction func(string, projects.BranchAction) ([]projects.Branch, error),
+) {
+	action, ok := decodeBranchAction(w, r)
+	if !ok {
+		return
+	}
+
+	branches, err := branchAction(projectID, action)
+	if err != nil {
+		if errors.Is(err, projects.ErrInvalidBranchName) || errors.Is(err, projects.ErrUnknownBranchAction) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		writeBranchError(w, projectID, err, "branch action failed")
+		return
+	}
+
+	writeJSON(w, branches)
+}
+
+// writeBranchError maps a branch operation error to a response: a missing
+// project is 404, a git failure (uncommitted changes, unmerged branch, merge
+// conflict) is 409 with git's own message as JSON so the UI can show it, and
+// anything else is a logged 500.
+func writeBranchError(w http.ResponseWriter, projectID string, err error, logPrefix string) {
+	if errors.Is(err, fs.ErrNotExist) {
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	var gitErr *projects.GitError
+	if errors.As(err, &gitErr) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": gitErr.Message})
+		return
+	}
+
+	log.Printf("%s for project %s: %v", logPrefix, projectID, err)
+	http.Error(w, logPrefix, http.StatusInternalServerError)
+}
+
 func writeLSPResponse(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -365,6 +453,27 @@ func decodeQueryRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
 	}
 
 	return request.Query, true
+}
+
+// decodeBranchAction reads the branch mutation POST body. On a malformed body
+// it writes a 400 response and returns ok=false.
+func decodeBranchAction(w http.ResponseWriter, r *http.Request) (projects.BranchAction, bool) {
+	defer r.Body.Close()
+
+	var request projects.BranchAction
+
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return projects.BranchAction{}, false
+	}
+	if err := decoder.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return projects.BranchAction{}, false
+	}
+
+	return request, true
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

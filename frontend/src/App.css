@@ -1202,6 +1202,237 @@
 	transform: none;
 }
 
+/* Git branch menu */
+.git-banner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 12px;
+	padding: 10px 14px;
+	border-radius: 12px;
+	font-size: 0.9rem;
+}
+
+.git-banner-merge {
+	background: rgba(124, 172, 255, 0.16);
+	border: 1px solid rgba(124, 172, 255, 0.32);
+	color: #e8eef8;
+}
+
+.git-banner-cancel {
+	flex: none;
+	padding: 4px 12px;
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-radius: 10px;
+	background: rgba(255, 255, 255, 0.06);
+	color: #f5f7fb;
+	font: inherit;
+	font-size: 0.82rem;
+	cursor: pointer;
+}
+
+.git-message {
+	margin: 0 0 12px;
+	padding: 10px 14px;
+	border-radius: 12px;
+	font-size: 0.88rem;
+}
+
+.git-message-error {
+	background: rgba(255, 96, 96, 0.12);
+	border: 1px solid rgba(255, 120, 120, 0.32);
+	color: #ffc4c4;
+	white-space: pre-wrap;
+}
+
+.git-message-ok {
+	background: rgba(96, 220, 150, 0.12);
+	border: 1px solid rgba(120, 220, 160, 0.3);
+	color: #bff0d2;
+}
+
+.git-tree {
+	list-style: none;
+	margin: 0;
+	padding: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	overflow-y: auto;
+}
+
+.git-tree .git-tree {
+	padding: 0;
+	overflow: visible;
+}
+
+.git-tree-item {
+	margin: 0;
+}
+
+.git-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 40px;
+	padding: 6px 10px 6px 0;
+	border-radius: 10px;
+	color: #f5f7fb;
+	transition: background 140ms ease;
+}
+
+.git-folder {
+	border: 0;
+	background: transparent;
+	color: rgba(232, 238, 248, 0.82);
+	font: inherit;
+	cursor: pointer;
+}
+
+.git-folder:hover,
+.git-branch:hover {
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.git-folder-caret {
+	width: 14px;
+	font-size: 0.7rem;
+	color: rgba(232, 238, 248, 0.6);
+}
+
+.git-folder-count {
+	margin-left: auto;
+	margin-right: 6px;
+	padding: 1px 8px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.08);
+	color: rgba(232, 238, 248, 0.6);
+	font-size: 0.74rem;
+}
+
+.git-branch-current {
+	background: rgba(124, 172, 255, 0.14);
+	box-shadow: inset 0 0 0 1px rgba(124, 172, 255, 0.26);
+}
+
+.git-branch-select {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+	padding: 4px 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.git-branch-select:disabled {
+	cursor: default;
+}
+
+.git-branch-icon {
+	width: 14px;
+	font-size: 0.7rem;
+	color: rgba(124, 172, 255, 0.9);
+}
+
+.git-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.git-current-badge {
+	flex: none;
+	padding: 1px 8px;
+	border-radius: 999px;
+	background: rgba(124, 172, 255, 0.26);
+	color: #dce8ff;
+	font-size: 0.72rem;
+	font-weight: 600;
+}
+
+.git-row-actions {
+	display: flex;
+	gap: 6px;
+	flex: none;
+	opacity: 0;
+	transition: opacity 120ms ease;
+}
+
+.git-row:hover .git-row-actions,
+.git-branch-current .git-row-actions {
+	opacity: 1;
+}
+
+.git-action {
+	padding: 4px 10px;
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	border-radius: 9px;
+	background: rgba(255, 255, 255, 0.05);
+	color: #f5f7fb;
+	font: inherit;
+	font-size: 0.78rem;
+	cursor: pointer;
+	transition:
+		background 140ms ease,
+		border-color 140ms ease,
+		opacity 140ms ease;
+}
+
+.git-action:hover {
+	background: rgba(255, 255, 255, 0.1);
+	border-color: rgba(124, 172, 255, 0.4);
+}
+
+.git-action:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.git-action-primary {
+	background: #e8eef8;
+	color: #12161d;
+	border-color: transparent;
+	font-weight: 600;
+}
+
+.git-action-danger:hover:not(:disabled) {
+	background: rgba(255, 96, 96, 0.16);
+	border-color: rgba(255, 120, 120, 0.4);
+	color: #ffc4c4;
+}
+
+.git-create-form {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	padding: 6px 10px 8px 0;
+}
+
+.git-create-input {
+	flex: 1;
+	min-width: 0;
+	padding: 7px 12px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	border-radius: 10px;
+	background: rgba(0, 0, 0, 0.22);
+	color: #f5f7fb;
+	font: inherit;
+	font-size: 0.85rem;
+}
+
+.git-create-input:focus {
+	outline: none;
+	border-color: rgba(124, 172, 255, 0.5);
+}
+
 @media (max-width: 640px) {
 	.sidebar {
 		top: 16px;

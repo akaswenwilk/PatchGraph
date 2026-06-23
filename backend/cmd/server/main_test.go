@@ -19,7 +19,7 @@ func TestProjectsEndpointReturnsProjects(t *testing.T) {
 			{ID: "alpha", Name: "PatchGraph", Path: "PatchGraph"},
 			{ID: "beta", Name: "PatchGraph", Path: "team/PatchGraph"},
 		}, nil
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -42,7 +42,7 @@ func TestProjectsEndpointReturnsProjects(t *testing.T) {
 func TestProjectsEndpointReturnsInternalServerError(t *testing.T) {
 	handler := newMux(func() ([]projects.Project, error) {
 		return nil, errors.New("boom")
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -57,7 +57,7 @@ func TestProjectsEndpointReturnsInternalServerError(t *testing.T) {
 func TestProjectsEndpointRejectsPost(t *testing.T) {
 	handler := newMux(func() ([]projects.Project, error) {
 		return []projects.Project{{ID: "alpha", Name: "PatchGraph", Path: "PatchGraph"}}, nil
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects", nil)
 	recorder := httptest.NewRecorder()
@@ -73,7 +73,7 @@ func TestProjectsEndpointRejectsPost(t *testing.T) {
 }
 
 func TestRootServesFrontend(t *testing.T) {
-	handler := newMux(nil, nil, nil, nil, nil)
+	handler := newMux(nil, nil, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	recorder := httptest.NewRecorder()
@@ -89,7 +89,7 @@ func TestRootServesFrontend(t *testing.T) {
 }
 
 func TestUnknownAPIRouteReturnsNotFound(t *testing.T) {
-	handler := newMux(nil, nil, nil, nil, nil)
+	handler := newMux(nil, nil, nil, nil, nil, nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/unknown", nil)
 	recorder := httptest.NewRecorder()
@@ -115,6 +115,8 @@ func TestProjectEndpointReturnsDetail(t *testing.T) {
 				Files: []string{"README.md", "frontend/src/App.tsx"},
 			}, nil
 		},
+		nil,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -144,6 +146,8 @@ func TestProjectEndpointReturnsNotFound(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects/missing", nil)
@@ -169,6 +173,8 @@ func TestProjectFileEndpointReturnsLines(t *testing.T) {
 			}
 			return []string{"line 1", "\tline 2"}, nil
 		},
+		nil,
+		nil,
 		nil,
 		nil,
 	)
@@ -201,6 +207,8 @@ func TestProjectFileEndpointReturnsProjectNotFound(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects/missing/files", strings.NewReader("{\"filename\":\"README.md\"}"))
@@ -221,6 +229,8 @@ func TestProjectFileEndpointRejectsInvalidBody(t *testing.T) {
 		func(projectID string, filename string) ([]string, error) { return nil, nil },
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects/alpha/files", strings.NewReader("{"))
@@ -238,6 +248,8 @@ func TestProjectFileEndpointRejectsGet(t *testing.T) {
 		func() ([]projects.Project, error) { return nil, nil },
 		nil,
 		func(projectID string, filename string) ([]string, error) { return nil, nil },
+		nil,
+		nil,
 		nil,
 		nil,
 	)
@@ -272,6 +284,8 @@ func TestProjectSearchEndpointReturnsMatches(t *testing.T) {
 			}, nil
 		},
 		nil,
+		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects/alpha/search", strings.NewReader("{\"query\":\"needle\"}"))
@@ -297,6 +311,8 @@ func TestProjectSearchEndpointRejectsGet(t *testing.T) {
 		nil,
 		func(projectID string, query string) ([]projects.SearchMatch, error) { return nil, nil },
 		nil,
+		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/projects/alpha/search", nil)
@@ -319,6 +335,8 @@ func TestProjectSearchEndpointRejectsInvalidBody(t *testing.T) {
 		nil,
 		func(projectID string, query string) ([]projects.SearchMatch, error) { return nil, nil },
 		nil,
+		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/projects/alpha/search", strings.NewReader("{"))
@@ -329,6 +347,124 @@ func TestProjectSearchEndpointRejectsInvalidBody(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
+}
+
+func TestProjectBranchesEndpointReturnsBranches(t *testing.T) {
+	handler := newMuxWithBranches(
+		func(projectID string) ([]projects.Branch, error) {
+			if projectID != "alpha" {
+				t.Fatalf("projectID = %q, want %q", projectID, "alpha")
+			}
+			return []projects.Branch{
+				{Name: "feature/login", IsCurrent: false},
+				{Name: "main", IsCurrent: true},
+			}, nil
+		},
+		nil,
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/projects/alpha/branches", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := strings.TrimSpace(recorder.Body.String())
+	want := "[{\"name\":\"feature/login\",\"isCurrent\":false},{\"name\":\"main\",\"isCurrent\":true}]"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestProjectBranchActionForwardsRequest(t *testing.T) {
+	handler := newMuxWithBranches(
+		nil,
+		func(projectID string, action projects.BranchAction) ([]projects.Branch, error) {
+			if projectID != "alpha" {
+				t.Fatalf("projectID = %q, want %q", projectID, "alpha")
+			}
+			if action.Action != "create" || action.Name != "feature/x" || action.Base != "main" {
+				t.Fatalf("action = %+v", action)
+			}
+			return []projects.Branch{{Name: "feature/x"}, {Name: "main", IsCurrent: true}}, nil
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/branches",
+		strings.NewReader("{\"action\":\"create\",\"name\":\"feature/x\",\"base\":\"main\"}"),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+func TestProjectBranchActionGitErrorReturnsConflict(t *testing.T) {
+	handler := newMuxWithBranches(
+		nil,
+		func(projectID string, action projects.BranchAction) ([]projects.Branch, error) {
+			return nil, &projects.GitError{Message: "Your local changes would be overwritten"}
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/branches",
+		strings.NewReader("{\"action\":\"checkout\",\"branch\":\"main\"}"),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
+	}
+	body := strings.TrimSpace(recorder.Body.String())
+	want := "{\"error\":\"Your local changes would be overwritten\"}"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestProjectBranchActionInvalidActionReturnsBadRequest(t *testing.T) {
+	handler := newMuxWithBranches(
+		nil,
+		func(projectID string, action projects.BranchAction) ([]projects.Branch, error) {
+			return nil, projects.ErrUnknownBranchAction
+		},
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/alpha/branches",
+		strings.NewReader("{\"action\":\"rebase\"}"),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+// newMuxWithBranches builds a mux wired only with the branch handlers, leaving
+// the unrelated handlers nil.
+func newMuxWithBranches(
+	listBranches func(string) ([]projects.Branch, error),
+	branchAction func(string, projects.BranchAction) ([]projects.Branch, error),
+) http.Handler {
+	return newMux(nil, nil, nil, nil, nil, listBranches, branchAction)
 }
 
 func TestParseProjectPath(t *testing.T) {

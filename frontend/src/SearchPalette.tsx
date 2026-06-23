@@ -306,7 +306,7 @@ export function TextSearch({
 // Shared modal chrome for both search palettes: a blurred backdrop, an Escape /
 // backdrop-click close, and the project-modal card styling reused from the repo
 // picker so the palettes feel native.
-function SearchOverlay({
+export function SearchOverlay({
 	title,
 	subtitle,
 	onClose,
@@ -331,7 +331,7 @@ function SearchOverlay({
 		<div className="modal-layer" role="presentation">
 			<button type="button" className="modal-backdrop" aria-label="Close search" onClick={onClose} />
 
-			<section className="project-modal search-modal" role="dialog" aria-modal="true">
+			<section className="project-modal search-modal" role="dialog" aria-modal="true" aria-label={title}>
 				<div className="project-modal-header">
 					<div>
 						<h1>{title}</h1>
