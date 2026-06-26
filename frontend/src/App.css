@@ -539,6 +539,40 @@
 	border-radius: 3px;
 }
 
+.code-row-collapsed {
+	align-items: center;
+	background: rgba(124, 172, 255, 0.08);
+	border-bottom: 1px solid rgba(124, 172, 255, 0.16);
+	border-top: 1px solid rgba(124, 172, 255, 0.16);
+}
+
+.code-row-collapsed .line-content {
+	padding: 4px 0;
+}
+
+.diff-expand-button {
+	border: 1px solid rgba(124, 172, 255, 0.32);
+	border-radius: 6px;
+	background: rgba(124, 172, 255, 0.12);
+	color: #c8dbff;
+	cursor: pointer;
+	font: inherit;
+	line-height: 1.2;
+	padding: 4px 10px;
+}
+
+.diff-expand-button:hover:not(:disabled),
+.diff-expand-button:focus-visible {
+	border-color: rgba(124, 172, 255, 0.62);
+	background: rgba(124, 172, 255, 0.2);
+	outline: none;
+}
+
+.diff-expand-button:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+
 @keyframes lsp-focus-flash {
 	0% {
 		background: rgba(124, 172, 255, 0.55);
