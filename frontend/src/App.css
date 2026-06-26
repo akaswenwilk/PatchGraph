@@ -426,9 +426,26 @@
 	cursor: grabbing;
 }
 
-/* The close button is inside the draggable header but keeps a normal cursor. */
-.file-window-header .file-window-close-button {
+/* The header controls live inside the draggable header but keep a normal cursor. */
+.file-window-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+}
+
+.file-window-header .file-window-control-button {
 	cursor: pointer;
+}
+
+/* A collapsed window is just its header: no rounded bottom needed, and the body
+   plus resize handles are gone. */
+.file-window-collapsed {
+	overflow: hidden;
+}
+
+.file-code-scroll-collapsed {
+	display: none;
 }
 
 .file-window-title-group {
@@ -1022,6 +1039,34 @@
 
 .file-window-close-button:active,
 .modal-close-button:active {
+	transform: translateY(1px);
+}
+
+.file-window-collapse-button {
+	width: 40px;
+	height: 40px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	border: 0;
+	border-radius: 14px;
+	background: rgba(255, 255, 255, 0.08);
+	color: #f5f7fb;
+	font: inherit;
+	font-size: 1rem;
+	line-height: 1;
+	cursor: pointer;
+	transition:
+		background 140ms ease,
+		transform 140ms ease;
+}
+
+.file-window-collapse-button:hover {
+	background: rgba(255, 255, 255, 0.14);
+}
+
+.file-window-collapse-button:active {
 	transform: translateY(1px);
 }
 
