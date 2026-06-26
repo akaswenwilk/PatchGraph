@@ -187,6 +187,46 @@ func TestPerformBranchActionMergeConflictAborts(t *testing.T) {
 	}
 }
 
+func TestCompareBranchesReturnsLineDiffs(t *testing.T) {
+	root, id := setupBranchRepo(t)
+	repoPath := filepath.Join(root, "PatchGraph")
+	runGit(t, repoPath, "switch", "-c", "feature")
+	writeFile(t, filepath.Join(repoPath, "base.txt"), "base\nfeature\n")
+	writeFile(t, filepath.Join(repoPath, "added.txt"), "new\n")
+	runGit(t, repoPath, "add", "base.txt", "added.txt")
+	runGit(t, repoPath, "commit", "-qm", "feature work")
+
+	comparison, err := CompareBranches(root, id, "main", "feature")
+	if err != nil {
+		t.Fatalf("CompareBranches() error = %v", err)
+	}
+	if comparison.Base != "main" || comparison.Compare != "feature" {
+		t.Fatalf("comparison = %#v, want main..feature", comparison)
+	}
+	if len(comparison.Files) != 2 {
+		t.Fatalf("len(files) = %d, want 2: %#v", len(comparison.Files), comparison.Files)
+	}
+
+	var baseDiff *FileDiff
+	for index := range comparison.Files {
+		if comparison.Files[index].Filename == "base.txt" {
+			baseDiff = &comparison.Files[index]
+		}
+	}
+	if baseDiff == nil {
+		t.Fatalf("base.txt diff missing: %#v", comparison.Files)
+	}
+	if len(baseDiff.Lines) != 2 {
+		t.Fatalf("len(base lines) = %d, want 2: %#v", len(baseDiff.Lines), baseDiff.Lines)
+	}
+	if baseDiff.Lines[0].Kind != "context" || baseDiff.Lines[0].OldLine != 1 || baseDiff.Lines[0].NewLine != 1 {
+		t.Fatalf("first line = %#v, want context line 1/1", baseDiff.Lines[0])
+	}
+	if baseDiff.Lines[1].Kind != "added" || baseDiff.Lines[1].NewLine != 2 || baseDiff.Lines[1].Text != "feature" {
+		t.Fatalf("second line = %#v, want added feature at new line 2", baseDiff.Lines[1])
+	}
+}
+
 func TestPerformBranchActionRejectsUnknownAction(t *testing.T) {
 	root, id := setupBranchRepo(t)
 

@@ -56,7 +56,7 @@ func start(args []string) error {
 
 	server := &http.Server{
 		Addr:    ":" + *port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler, searchHandler, lspHandler, branchesHandler, branchActionHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, searchHandler, lspHandler, branchesHandler, branchActionHandler, branchCompareHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -153,6 +153,15 @@ func branchActionHandler(projectID string, action projects.BranchAction) ([]proj
 	return projects.PerformBranchAction(root, projectID, action)
 }
 
+func branchCompareHandler(projectID string, base string, compare string) (projects.BranchComparison, error) {
+	root, err := projects.RootFromEnv()
+	if err != nil {
+		return projects.BranchComparison{}, err
+	}
+
+	return projects.CompareBranches(root, projectID, base, compare)
+}
+
 // lspDefaultTimeout bounds a single LSP analysis. Cold language server startup
 // and indexing can be slow, so it is generous.
 const lspDefaultTimeout = 90 * time.Second
@@ -187,8 +196,13 @@ func newMux(
 	analyzeFile func(string, string) (lsp.FileAnalysis, error),
 	listBranches func(string) ([]projects.Branch, error),
 	branchAction func(string, projects.BranchAction) ([]projects.Branch, error),
+	compareBranches ...func(string, string, string) (projects.BranchComparison, error),
 ) http.Handler {
 	mux := http.NewServeMux()
+	var compareBranchHandler func(string, string, string) (projects.BranchComparison, error)
+	if len(compareBranches) > 0 {
+		compareBranchHandler = compareBranches[0]
+	}
 	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -225,10 +239,12 @@ func newMux(
 			writeBranchesResponse(w, projectID, listBranches)
 		case remainder == "branches" && r.Method == http.MethodPost:
 			writeBranchActionResponse(w, r, projectID, branchAction)
+		case remainder == "branch-diff" && r.Method == http.MethodPost:
+			writeBranchCompareResponse(w, r, projectID, compareBranchHandler)
 		case remainder == "":
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		case remainder == "files", remainder == "search", remainder == "lsp":
+		case remainder == "files", remainder == "search", remainder == "lsp", remainder == "branch-diff":
 			w.Header().Set("Allow", http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		case remainder == "branches":
@@ -355,6 +371,36 @@ func writeBranchActionResponse(
 	writeJSON(w, branches)
 }
 
+func writeBranchCompareResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID string,
+	compareBranches func(string, string, string) (projects.BranchComparison, error),
+) {
+	if compareBranches == nil {
+		http.Error(w, "branch comparison unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	request, ok := decodeBranchCompareRequest(w, r)
+	if !ok {
+		return
+	}
+
+	comparison, err := compareBranches(projectID, request.Base, request.Compare)
+	if err != nil {
+		if errors.Is(err, projects.ErrInvalidBranchName) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		writeBranchError(w, projectID, err, "branch comparison failed")
+		return
+	}
+
+	writeJSON(w, comparison)
+}
+
 // writeBranchError maps a branch operation error to a response: a missing
 // project is 404, a git failure (uncommitted changes, unmerged branch, merge
 // conflict) is 409 with git's own message as JSON so the UI can show it, and
@@ -471,6 +517,30 @@ func decodeBranchAction(w http.ResponseWriter, r *http.Request) (projects.Branch
 	if err := decoder.Decode(new(struct{})); !errors.Is(err, io.EOF) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return projects.BranchAction{}, false
+	}
+
+	return request, true
+}
+
+type branchCompareRequest struct {
+	Base    string `json:"base"`
+	Compare string `json:"compare"`
+}
+
+func decodeBranchCompareRequest(w http.ResponseWriter, r *http.Request) (branchCompareRequest, bool) {
+	defer r.Body.Close()
+
+	var request branchCompareRequest
+
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return branchCompareRequest{}, false
+	}
+	if err := decoder.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return branchCompareRequest{}, false
 	}
 
 	return request, true

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
-import { CodeView } from './CodeView'
+import { CodeView, type DiffLineMeta } from './CodeView'
 import { FuzzyFileSearch, TextSearch } from './SearchPalette'
 import { GitMenu } from './GitMenu'
 import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
@@ -40,9 +40,12 @@ type ProjectDetail = {
 type OpenFile = {
 	id: string
 	filename: string
+	title?: string
+	subtitle?: string
 	state: LoadState
 	error: string
 	lines: string[]
+	diffLines: DiffLineMeta[] | null
 	lspState: LspState
 	symbols: LspSymbol[]
 	// Zero-based line to scroll to and highlight when the window opens (set when
@@ -56,6 +59,26 @@ type OpenFile = {
 	x: number
 	y: number
 	zIndex: number
+}
+
+type BranchComparison = {
+	base: string
+	compare: string
+	files: BranchFileDiff[]
+}
+
+type BranchFileDiff = {
+	filename: string
+	oldPath?: string
+	status: 'added' | 'deleted' | 'modified' | 'renamed'
+	lines: BranchDiffLine[]
+}
+
+type BranchDiffLine = {
+	kind: 'context' | 'added' | 'removed'
+	oldLine?: number
+	newLine?: number
+	text: string
 }
 
 type TreeNode = {
@@ -122,6 +145,52 @@ function isProjectDetail(value: unknown): value is ProjectDetail {
 		typeof candidate.path === 'string' &&
 		Array.isArray(candidate.files) &&
 		candidate.files.every((entry) => typeof entry === 'string')
+	)
+}
+
+function isBranchComparison(value: unknown): value is BranchComparison {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		typeof candidate.base === 'string' &&
+		typeof candidate.compare === 'string' &&
+		Array.isArray(candidate.files) &&
+		candidate.files.every(isBranchFileDiff)
+	)
+}
+
+function isBranchFileDiff(value: unknown): value is BranchFileDiff {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		typeof candidate.filename === 'string' &&
+		(candidate.oldPath === undefined || typeof candidate.oldPath === 'string') &&
+		(candidate.status === 'added' ||
+			candidate.status === 'deleted' ||
+			candidate.status === 'modified' ||
+			candidate.status === 'renamed') &&
+		Array.isArray(candidate.lines) &&
+		candidate.lines.every(isBranchDiffLine)
+	)
+}
+
+function isBranchDiffLine(value: unknown): value is BranchDiffLine {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		(candidate.kind === 'context' || candidate.kind === 'added' || candidate.kind === 'removed') &&
+		(candidate.oldLine === undefined || typeof candidate.oldLine === 'number') &&
+		(candidate.newLine === undefined || typeof candidate.newLine === 'number') &&
+		typeof candidate.text === 'string'
 	)
 }
 
@@ -913,6 +982,7 @@ function App() {
 			state: 'loading' as LoadState,
 			error: '',
 			lines: [],
+			diffLines: null,
 			lspState: 'loading' as LspState,
 			symbols: [],
 			focusLine: null,
@@ -922,6 +992,30 @@ function App() {
 			x,
 			y,
 			zIndex: nextZIndexRef.current++,
+		}
+	}
+
+	function createDiffWindow(fileDiff: BranchFileDiff, base: string, compare: string, index: number) {
+		const pendingWindow = {
+			...createWindow(fileDiff.filename),
+			state: 'ready' as LoadState,
+			lines: fileDiff.lines.map((line) => line.text),
+			diffLines: fileDiff.lines.map((line) => ({
+				kind: line.kind,
+				oldLine: line.oldLine,
+				newLine: line.newLine,
+			})),
+			title: fileDiff.filename,
+			subtitle: base + ' -> ' + compare + ' · ' + fileDiff.status,
+			lspState: fileDiff.status === 'deleted' ? ('unsupported' as LspState) : ('loading' as LspState),
+		}
+		const column = index % 2
+		const row = Math.floor(index / 2)
+
+		return {
+			...pendingWindow,
+			x: WINDOW_BASE_X + column * ((pendingWindow.width ?? DEFAULT_WINDOW_WIDTH) + WINDOW_OFFSET_X),
+			y: WINDOW_BASE_Y + row * ((pendingWindow.height ?? DEFAULT_WINDOW_HEIGHT) + WINDOW_OFFSET_Y),
 		}
 	}
 
@@ -978,6 +1072,41 @@ function App() {
 		// Contents and language-server info load in parallel; neither blocks the other.
 		void loadFileContents(activeProject.id, filename, pendingWindow.id)
 		void loadLspInfo(activeProject.id, filename, pendingWindow.id)
+	}
+
+	async function openBranchComparison(base: string, compare: string) {
+		if (activeProject === null) {
+			return
+		}
+
+		const response = await fetch('/api/projects/' + encodeURIComponent(activeProject.id) + '/branch-diff', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ base, compare }),
+		})
+		if (!response.ok) {
+			throw new Error('Request failed with status ' + response.status)
+		}
+
+		const data: unknown = await response.json()
+		if (!isBranchComparison(data)) {
+			throw new Error('Branch comparison response was invalid')
+		}
+
+		const nextWindows = data.files.map((fileDiff, index) =>
+			createDiffWindow(fileDiff, data.base, data.compare, index),
+		)
+		setOpenFiles(nextWindows)
+		setActiveWindowID(nextWindows[0]?.id ?? null)
+		setOpenBubble(null)
+		setConnections([])
+		setSelectedConnection(null)
+
+		for (const fileWindow of nextWindows) {
+			if (fileWindow.lspState === 'loading') {
+				void loadLspInfo(activeProject.id, fileWindow.filename, fileWindow.id)
+			}
+		}
 	}
 
 	// Opens a file in a new window scrolled to and highlighting a line, used by
@@ -1594,10 +1723,10 @@ function App() {
 											<div className="file-window-title-group">
 												<div>
 													<p className="workspace-eyebrow">{activeProject?.name ?? ''}</p>
-													<h2>{fileWindow.filename}</h2>
+													<h2>{fileWindow.title ?? fileWindow.filename}</h2>
 												</div>
 												<div className="file-window-meta">
-													<p>{fileWindow.lines.length} lines</p>
+													<p>{fileWindow.subtitle ?? fileWindow.lines.length + ' lines'}</p>
 													<LspStatusChip fileWindow={fileWindow} />
 												</div>
 											</div>
@@ -1616,6 +1745,7 @@ function App() {
 											<CodeView
 												filename={fileWindow.filename}
 												lines={fileWindow.lines}
+												diffLines={fileWindow.diffLines}
 												symbols={fileWindow.symbols}
 												focusLine={fileWindow.focusLine}
 												visibleRange={fileWindow.visibleRange}
@@ -1797,11 +1927,19 @@ function App() {
 			) : null}
 
 			{searchMode === 'git' && activeProject !== null ? (
-				<GitMenu
-					projectID={activeProject.id}
-					onClose={() => setSearchMode(null)}
-					onWorkingTreeChanged={() => void reloadActiveProject()}
-				/>
+			<GitMenu
+				projectID={activeProject.id}
+				onClose={() => setSearchMode(null)}
+				onWorkingTreeChanged={() => void reloadActiveProject()}
+				onCompare={(base, compare) =>
+					openBranchComparison(base, compare)
+						.then(() => setSearchMode(null))
+						.catch((error) => {
+							setProjectState('error')
+							setProjectError(error instanceof Error ? error.message : 'Unknown error')
+						})
+				}
+			/>
 			) : null}
 		</div>
 	)

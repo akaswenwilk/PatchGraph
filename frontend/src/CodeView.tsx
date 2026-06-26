@@ -43,6 +43,7 @@ type CurrentOccurrence = { file: string; line: number; character: number }
 type CodeViewProps = {
 	filename: string
 	lines: string[]
+	diffLines?: DiffLineMeta[] | null
 	symbols?: LspSymbol[]
 	// Zero-based line to scroll to and highlight once content is rendered.
 	focusLine?: number | null
@@ -57,6 +58,12 @@ type CodeViewProps = {
 	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocationFromSymbol
 	onStartConnection?: StartConnection
+}
+
+export type DiffLineMeta = {
+	kind: 'context' | 'added' | 'removed'
+	oldLine?: number
+	newLine?: number
 }
 
 type HighlightResult = {
@@ -74,6 +81,7 @@ type HighlightResult = {
 export function CodeView({
 	filename,
 	lines,
+	diffLines,
 	symbols,
 	focusLine,
 	visibleRange,
@@ -120,10 +128,31 @@ export function CodeView({
 	// Only use tokens that match the lines currently being rendered.
 	const highlighted = result?.source === lines ? result.tokens : null
 
-	const lineMarks = useMemo(
-		() => buildLineMarks(lines, symbols ?? [], filename),
-		[lines, symbols, filename],
-	)
+	const lineMarks = useMemo(() => {
+		if (!diffLines) {
+			return buildLineMarks(lines, symbols ?? [], filename)
+		}
+
+		const newSideLines: string[] = []
+		for (const [displayIndex, meta] of diffLines.entries()) {
+			if (meta.newLine !== undefined) {
+				newSideLines[meta.newLine - 1] = lines[displayIndex]
+			}
+		}
+
+		const sourceMarks = buildLineMarks(newSideLines, symbols ?? [], filename)
+		const remapped = new Map<number, NonNullable<ReturnType<typeof sourceMarks.get>>>()
+		for (const [displayIndex, meta] of diffLines.entries()) {
+			if (meta.newLine === undefined) {
+				continue
+			}
+			const marks = sourceMarks.get(meta.newLine - 1)
+			if (marks) {
+				remapped.set(displayIndex, marks)
+			}
+		}
+		return remapped
+	}, [lines, symbols, filename, diffLines])
 
 	return (
 		<div className="file-code" role="presentation">
@@ -138,21 +167,35 @@ export function CodeView({
 				const marks = lineMarks.get(index) ?? []
 				const segments = splitTokensWithMarks(baseTokens, marks)
 				const isFocused = focusLine === index
+				const diffMeta = diffLines?.[index] ?? null
+				const rowClassName = [
+					'code-row',
+					isFocused ? 'code-row-focused' : '',
+					diffMeta ? `code-row-diff code-row-${diffMeta.kind}` : '',
+				]
+					.filter(Boolean)
+					.join(' ')
+				const renderedLineNumber = diffMeta
+					? diffMeta.kind === 'removed'
+						? diffMeta.oldLine
+						: diffMeta.newLine
+					: index + 1
+				const symbolLine = diffMeta?.newLine === undefined ? index : diffMeta.newLine - 1
 
 				return (
 					<div
-						className={isFocused ? 'code-row code-row-focused' : 'code-row'}
+						className={rowClassName}
 						key={`${filename}:${index + 1}`}
 						ref={isFocused ? focusedRowRef : undefined}
 					>
-						<span className="line-number">{index + 1}</span>
+						<span className="line-number">{renderedLineNumber ?? ''}</span>
 						<span className="line-content">
 							{line === '' ? ' ' : segments.map((segment, segmentIndex) => (
 								<CodeSegment
 									key={segmentIndex}
 									segment={segment}
 									file={filename}
-									line={index}
+									line={symbolLine}
 									windowID={windowID}
 									openBubble={openBubble}
 									onBubbleChange={onBubbleChange}

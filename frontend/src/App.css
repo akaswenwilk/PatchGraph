@@ -513,6 +513,22 @@
 	animation: lsp-focus-flash 1.2s ease-out;
 }
 
+.code-row-added {
+	background: rgba(46, 160, 67, 0.22);
+}
+
+.code-row-added .line-number {
+	color: rgba(190, 255, 207, 0.66);
+}
+
+.code-row-removed {
+	background: rgba(248, 81, 73, 0.2);
+}
+
+.code-row-removed .line-number {
+	color: rgba(255, 205, 210, 0.66);
+}
+
 @keyframes lsp-focus-flash {
 	0% {
 		background: rgba(124, 172, 255, 0.55);
@@ -1217,6 +1233,12 @@
 .git-banner-merge {
 	background: rgba(124, 172, 255, 0.16);
 	border: 1px solid rgba(124, 172, 255, 0.32);
+	color: #e8eef8;
+}
+
+.git-banner-compare {
+	background: rgba(141, 210, 182, 0.15);
+	border: 1px solid rgba(141, 210, 182, 0.32);
 	color: #e8eef8;
 }
 
