@@ -1090,7 +1090,7 @@ function App() {
 		}
 	}
 
-	function expandCollapsedDiff(windowID: string, lineIndex: number) {
+	function expandCollapsedDiff(windowID: string, lineIndex: number, direction: 'up' | 'down') {
 		setOpenFiles((current) =>
 			current.map((fileWindow) => {
 				if (fileWindow.id !== windowID || fileWindow.diffLines === null) {
@@ -1102,8 +1102,10 @@ function App() {
 					return fileWindow
 				}
 
-				const revealed = collapsed.hidden.slice(0, 10)
-				const remaining = collapsed.hidden.slice(10)
+				const revealed =
+					direction === 'down' ? collapsed.hidden.slice(0, 10) : collapsed.hidden.slice(-10)
+				const remaining =
+					direction === 'down' ? collapsed.hidden.slice(10) : collapsed.hidden.slice(0, -10)
 				const revealedLines = revealed.map((line) => line.text)
 				const revealedMeta = revealed.map((line) => ({
 					kind: line.kind,
@@ -1111,12 +1113,15 @@ function App() {
 					newLine: line.newLine,
 					changes: line.changes,
 				}))
+				const collapsedLineText = `${remaining.length} unchanged ${remaining.length === 1 ? 'line' : 'lines'}`
 				const replacementLines =
-					remaining.length > 0
-						? [...revealedLines, `${remaining.length} unchanged ${remaining.length === 1 ? 'line' : 'lines'}`]
-						: revealedLines
+					remaining.length > 0 && direction === 'down'
+						? [...revealedLines, collapsedLineText]
+						: remaining.length > 0
+							? [collapsedLineText, ...revealedLines]
+							: revealedLines
 				const replacementMeta =
-					remaining.length > 0
+					remaining.length > 0 && direction === 'down'
 						? [
 								...revealedMeta,
 								{
@@ -1124,7 +1129,15 @@ function App() {
 									hidden: remaining,
 								},
 							]
-						: revealedMeta
+						: remaining.length > 0
+							? [
+									{
+										...collapsed,
+										hidden: remaining,
+									},
+									...revealedMeta,
+								]
+							: revealedMeta
 
 				return {
 					...fileWindow,
@@ -1881,8 +1894,8 @@ function App() {
 													openLocationInNewWindow(fileWindow.id, path, line, source, visibleRange)
 												}
 												onStartConnection={startConnectionDraw}
-												onExpandCollapsedDiff={(lineIndex) =>
-													expandCollapsedDiff(fileWindow.id, lineIndex)
+												onExpandCollapsedDiff={(lineIndex, direction) =>
+													expandCollapsedDiff(fileWindow.id, lineIndex, direction)
 												}
 											/>
 										</div>

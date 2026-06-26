@@ -547,7 +547,10 @@
 }
 
 .code-row-collapsed .line-content {
+	display: flex;
+	gap: 8px;
 	padding: 4px 0;
+	white-space: normal;
 }
 
 .diff-expand-button {

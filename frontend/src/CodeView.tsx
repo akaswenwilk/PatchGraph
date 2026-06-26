@@ -58,7 +58,7 @@ type CodeViewProps = {
 	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocationFromSymbol
 	onStartConnection?: StartConnection
-	onExpandCollapsedDiff?: (lineIndex: number) => void
+	onExpandCollapsedDiff?: (lineIndex: number, direction: 'up' | 'down') => void
 }
 
 export type DiffLineMeta = {
@@ -197,11 +197,21 @@ export function CodeView({
 								<button
 									type="button"
 									className="diff-expand-button"
-									onClick={() => onExpandCollapsedDiff?.(index)}
+									onClick={() => onExpandCollapsedDiff?.(index, 'up')}
 									disabled={hiddenCount === 0}
 								>
 									{hiddenCount > 0
-										? `Show 10 more lines (${hiddenCount} hidden)`
+										? `Show 10 lines up (${hiddenCount} hidden)`
+										: 'No hidden lines'}
+								</button>
+								<button
+									type="button"
+									className="diff-expand-button"
+									onClick={() => onExpandCollapsedDiff?.(index, 'down')}
+									disabled={hiddenCount === 0}
+								>
+									{hiddenCount > 0
+										? `Show 10 lines down (${hiddenCount} hidden)`
 										: 'No hidden lines'}
 								</button>
 							</span>
