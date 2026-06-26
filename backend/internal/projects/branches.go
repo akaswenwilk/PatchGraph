@@ -3,6 +3,7 @@ package projects
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -27,10 +28,8 @@ type BranchAction struct {
 	Target string `json:"target"` // merge: branch merged into
 }
 
-// BranchComparison is the hunk-level diff between two local branches. The Files
-// field is intentionally kept for API compatibility with the frontend's first
-// diff view, but each entry now represents one hunk window. A file with two
-// changed hunks appears twice with the same filename and different HunkIndex.
+// BranchComparison is the file-level diff between two local branches. Large
+// unchanged spans between hunks are represented as collapsed DiffLine entries.
 type BranchComparison struct {
 	Base    string     `json:"base"`
 	Compare string     `json:"compare"`
@@ -47,11 +46,12 @@ type FileDiff struct {
 }
 
 type DiffLine struct {
-	Kind    string              `json:"kind"` // context | added | removed
+	Kind    string              `json:"kind"` // context | added | removed | collapsed
 	OldLine int                 `json:"oldLine,omitempty"`
 	NewLine int                 `json:"newLine,omitempty"`
 	Text    string              `json:"text"`
 	Changes []DiffLineHighlight `json:"changes,omitempty"`
+	Hidden  []DiffLine          `json:"hidden,omitempty"`
 }
 
 type DiffLineHighlight struct {
@@ -213,8 +213,141 @@ func CompareBranches(root, projectID, base, compare string) (BranchComparison, e
 	return BranchComparison{
 		Base:    base,
 		Compare: compare,
-		Files:   parseUnifiedDiff(output),
+		Files:   collapseDiffHunks(project, base, compare, parseUnifiedDiff(output)),
 	}, nil
+}
+
+func collapseDiffHunks(project Project, base, compare string, hunks []FileDiff) []FileDiff {
+	files := make([]FileDiff, 0)
+	for index := 0; index < len(hunks); {
+		first := hunks[index]
+		key := first.filenameKey()
+		end := index + 1
+		for end < len(hunks) && hunks[end].filenameKey() == key {
+			end++
+		}
+
+		fileHunks := hunks[index:end]
+		collapsed := FileDiff{
+			Filename: first.Filename,
+			OldPath:  first.OldPath,
+			Status:   first.Status,
+			Header:   fmt.Sprintf("%d %s", len(fileHunks), pluralize("hunk", len(fileHunks))),
+		}
+
+		contentRef := compare
+		contentPath := first.Filename
+		useOldSide := first.Status == "deleted"
+		if useOldSide {
+			contentRef = base
+			contentPath = first.OldPath
+		}
+		content := readGitFileLines(project, contentRef, contentPath)
+
+		for hunkIndex, hunk := range fileHunks {
+			if hunkIndex > 0 {
+				_, previousEnd := hunkVisibleRange(fileHunks[hunkIndex-1], useOldSide)
+				nextStart, _ := hunkVisibleRange(hunk, useOldSide)
+				if previousEnd > 0 && nextStart > 0 {
+					hidden := contextLinesFromContent(content, previousEnd+1, nextStart-1, useOldSide)
+					if len(hidden) > 0 {
+						collapsed.Lines = append(collapsed.Lines, DiffLine{
+							Kind:   "collapsed",
+							Text:   fmt.Sprintf("%d unchanged %s", len(hidden), pluralize("line", len(hidden))),
+							Hidden: hidden,
+						})
+					}
+				}
+			}
+			collapsed.Lines = append(collapsed.Lines, hunk.Lines...)
+		}
+
+		files = append(files, collapsed)
+		index = end
+	}
+
+	return files
+}
+
+func (file FileDiff) filenameKey() string {
+	if file.Filename != "" {
+		return file.Filename
+	}
+	return file.OldPath
+}
+
+func pluralize(word string, count int) string {
+	if count == 1 {
+		return word
+	}
+	return word + "s"
+}
+
+func readGitFileLines(project Project, ref, filename string) []string {
+	if ref == "" || filename == "" {
+		return nil
+	}
+
+	output, err := gitInProject(project, "show", ref+":"+filename)
+	if err != nil {
+		return nil
+	}
+	output = strings.TrimSuffix(output, "\n")
+	if output == "" {
+		return []string{}
+	}
+	return strings.Split(output, "\n")
+}
+
+func hunkVisibleRange(hunk FileDiff, oldSide bool) (int, int) {
+	start := 0
+	end := 0
+	for _, line := range hunk.Lines {
+		lineNumber := line.NewLine
+		if oldSide {
+			lineNumber = line.OldLine
+		}
+		if lineNumber == 0 {
+			continue
+		}
+		if start == 0 || lineNumber < start {
+			start = lineNumber
+		}
+		if lineNumber > end {
+			end = lineNumber
+		}
+	}
+	return start, end
+}
+
+func contextLinesFromContent(content []string, start, end int, oldSide bool) []DiffLine {
+	if start > end || len(content) == 0 {
+		return nil
+	}
+	if start < 1 {
+		start = 1
+	}
+	if end > len(content) {
+		end = len(content)
+	}
+	if start > end {
+		return nil
+	}
+
+	lines := make([]DiffLine, 0, end-start+1)
+	for lineNumber := start; lineNumber <= end; lineNumber++ {
+		line := DiffLine{
+			Kind: "context",
+			Text: content[lineNumber-1],
+		}
+		if oldSide {
+			line.OldLine = lineNumber
+		} else {
+			line.NewLine = lineNumber
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func parseUnifiedDiff(output string) []FileDiff {

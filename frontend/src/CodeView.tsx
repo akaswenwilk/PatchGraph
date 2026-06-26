@@ -58,10 +58,20 @@ type CodeViewProps = {
 	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocationFromSymbol
 	onStartConnection?: StartConnection
+	onExpandCollapsedDiff?: (lineIndex: number, direction: 'up' | 'down') => void
 }
 
 export type DiffLineMeta = {
-	kind: 'context' | 'added' | 'removed'
+	kind: 'context' | 'added' | 'removed' | 'collapsed'
+	oldLine?: number
+	newLine?: number
+	changes?: DiffLineChange[]
+	hidden?: DiffHiddenLine[]
+}
+
+export type DiffHiddenLine = {
+	text: string
+	kind: 'context'
 	oldLine?: number
 	newLine?: number
 	changes?: DiffLineChange[]
@@ -96,6 +106,7 @@ export function CodeView({
 	onBubbleChange,
 	onOpenLocation,
 	onStartConnection,
+	onExpandCollapsedDiff,
 }: CodeViewProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null)
 	const focusedRowRef = useRef<HTMLDivElement | null>(null)
@@ -171,9 +182,44 @@ export function CodeView({
 				const baseTokens: HighlightedToken[] =
 					tokens && tokens.length > 0 ? tokens : [{ content: line, color: undefined }]
 				const marks = lineMarks.get(index) ?? []
-				const segments = splitTokensWithMarks(baseTokens, marks)
 				const isFocused = focusLine === index
 				const diffMeta = diffLines?.[index] ?? null
+				if (diffMeta?.kind === 'collapsed') {
+					const hiddenCount = diffMeta.hidden?.length ?? 0
+					return (
+						<div
+							className="code-row code-row-diff code-row-collapsed"
+							key={`${filename}:${index + 1}:collapsed`}
+							ref={isFocused ? focusedRowRef : undefined}
+						>
+							<span className="line-number" />
+							<span className="line-content">
+								<button
+									type="button"
+									className="diff-expand-button"
+									onClick={() => onExpandCollapsedDiff?.(index, 'up')}
+									disabled={hiddenCount === 0}
+								>
+									{hiddenCount > 0
+										? `Show 10 lines up (${hiddenCount} hidden)`
+										: 'No hidden lines'}
+								</button>
+								<button
+									type="button"
+									className="diff-expand-button"
+									onClick={() => onExpandCollapsedDiff?.(index, 'down')}
+									disabled={hiddenCount === 0}
+								>
+									{hiddenCount > 0
+										? `Show 10 lines down (${hiddenCount} hidden)`
+										: 'No hidden lines'}
+								</button>
+							</span>
+						</div>
+					)
+				}
+
+				const segments = splitTokensWithMarks(baseTokens, marks)
 				const renderedSegments = splitSegmentsWithDiffHighlights(segments, diffMeta?.changes ?? [])
 				const rowClassName = [
 					'code-row',

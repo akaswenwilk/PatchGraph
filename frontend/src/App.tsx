@@ -77,7 +77,16 @@ type BranchFileDiff = {
 }
 
 type BranchDiffLine = {
-	kind: 'context' | 'added' | 'removed'
+	kind: 'context' | 'added' | 'removed' | 'collapsed'
+	oldLine?: number
+	newLine?: number
+	text: string
+	changes?: DiffLineChange[]
+	hidden?: BranchHiddenDiffLine[]
+}
+
+type BranchHiddenDiffLine = {
+	kind: 'context'
 	oldLine?: number
 	newLine?: number
 	text: string
@@ -197,7 +206,28 @@ function isBranchDiffLine(value: unknown): value is BranchDiffLine {
 
 	const candidate = value as Record<string, unknown>
 	return (
-		(candidate.kind === 'context' || candidate.kind === 'added' || candidate.kind === 'removed') &&
+		(candidate.kind === 'context' ||
+			candidate.kind === 'added' ||
+			candidate.kind === 'removed' ||
+			candidate.kind === 'collapsed') &&
+		(candidate.oldLine === undefined || typeof candidate.oldLine === 'number') &&
+		(candidate.newLine === undefined || typeof candidate.newLine === 'number') &&
+		typeof candidate.text === 'string' &&
+		(candidate.changes === undefined ||
+			(Array.isArray(candidate.changes) && candidate.changes.every(isDiffLineChange))) &&
+		(candidate.hidden === undefined ||
+			(Array.isArray(candidate.hidden) && candidate.hidden.every(isBranchHiddenDiffLine)))
+	)
+}
+
+function isBranchHiddenDiffLine(value: unknown): value is BranchHiddenDiffLine {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		candidate.kind === 'context' &&
 		(candidate.oldLine === undefined || typeof candidate.oldLine === 'number') &&
 		(candidate.newLine === undefined || typeof candidate.newLine === 'number') &&
 		typeof candidate.text === 'string' &&
@@ -1022,30 +1052,109 @@ function App() {
 	}
 
 	function createDiffWindow(fileDiff: BranchFileDiff, base: string, compare: string, index: number) {
+		const visibleLineCount = fileDiff.lines.length
 		const pendingWindow = {
 			...createWindow(fileDiff.filename),
 			state: 'ready' as LoadState,
 			lines: fileDiff.lines.map((line) => line.text),
-			diffLines: fileDiff.lines.map((line) => ({
-				kind: line.kind,
-				oldLine: line.oldLine,
-				newLine: line.newLine,
-				changes: line.changes,
-			})),
-			title: fileDiff.filename + ' #' + fileDiff.hunkIndex,
+			diffLines: fileDiff.lines.map(toDiffLineMeta),
+			title: fileDiff.filename,
 			subtitle: base + ' -> ' + compare + ' · ' + fileDiff.status + ' · ' + fileDiff.header,
 			lspState: fileDiff.status === 'deleted' ? ('unsupported' as LspState) : ('loading' as LspState),
 		}
 		const column = index % 2
 		const row = Math.floor(index / 2)
-		const hunkHeight = Math.min(4000, Math.max(180, 104 + fileDiff.lines.length * 24))
+		const diffHeight = Math.min(4000, Math.max(220, 104 + visibleLineCount * 24))
 
 		return {
 			...pendingWindow,
-			height: hunkHeight,
+			height: diffHeight,
 			x: WINDOW_BASE_X + column * ((pendingWindow.width ?? DEFAULT_WINDOW_WIDTH) + WINDOW_OFFSET_X),
-			y: WINDOW_BASE_Y + row * (hunkHeight + WINDOW_OFFSET_Y),
+			y: WINDOW_BASE_Y + row * (diffHeight + WINDOW_OFFSET_Y),
 		}
+	}
+
+	function toDiffLineMeta(line: BranchDiffLine): DiffLineMeta {
+		return {
+			kind: line.kind,
+			oldLine: line.oldLine,
+			newLine: line.newLine,
+			changes: line.changes,
+			hidden: line.hidden?.map((hiddenLine) => ({
+				text: hiddenLine.text,
+				kind: hiddenLine.kind,
+				oldLine: hiddenLine.oldLine,
+				newLine: hiddenLine.newLine,
+				changes: hiddenLine.changes,
+			})),
+		}
+	}
+
+	function expandCollapsedDiff(windowID: string, lineIndex: number, direction: 'up' | 'down') {
+		setOpenFiles((current) =>
+			current.map((fileWindow) => {
+				if (fileWindow.id !== windowID || fileWindow.diffLines === null) {
+					return fileWindow
+				}
+
+				const collapsed = fileWindow.diffLines[lineIndex]
+				if (collapsed?.kind !== 'collapsed' || !collapsed.hidden || collapsed.hidden.length === 0) {
+					return fileWindow
+				}
+
+				const revealed =
+					direction === 'down' ? collapsed.hidden.slice(0, 10) : collapsed.hidden.slice(-10)
+				const remaining =
+					direction === 'down' ? collapsed.hidden.slice(10) : collapsed.hidden.slice(0, -10)
+				const revealedLines = revealed.map((line) => line.text)
+				const revealedMeta = revealed.map((line) => ({
+					kind: line.kind,
+					oldLine: line.oldLine,
+					newLine: line.newLine,
+					changes: line.changes,
+				}))
+				const collapsedLineText = `${remaining.length} unchanged ${remaining.length === 1 ? 'line' : 'lines'}`
+				const replacementLines =
+					remaining.length > 0 && direction === 'down'
+						? [...revealedLines, collapsedLineText]
+						: remaining.length > 0
+							? [collapsedLineText, ...revealedLines]
+							: revealedLines
+				const replacementMeta =
+					remaining.length > 0 && direction === 'down'
+						? [
+								...revealedMeta,
+								{
+									...collapsed,
+									hidden: remaining,
+								},
+							]
+						: remaining.length > 0
+							? [
+									{
+										...collapsed,
+										hidden: remaining,
+									},
+									...revealedMeta,
+								]
+							: revealedMeta
+
+				return {
+					...fileWindow,
+					lines: [
+						...fileWindow.lines.slice(0, lineIndex),
+						...replacementLines,
+						...fileWindow.lines.slice(lineIndex + 1),
+					],
+					diffLines: [
+						...fileWindow.diffLines.slice(0, lineIndex),
+						...replacementMeta,
+						...fileWindow.diffLines.slice(lineIndex + 1),
+					],
+					height: Math.min(4000, (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) + revealed.length * 24),
+				}
+			}),
+		)
 	}
 
 	async function loadFileContents(projectID: string, filename: string, windowID: string) {
@@ -1785,6 +1894,9 @@ function App() {
 													openLocationInNewWindow(fileWindow.id, path, line, source, visibleRange)
 												}
 												onStartConnection={startConnectionDraw}
+												onExpandCollapsedDiff={(lineIndex, direction) =>
+													expandCollapsedDiff(fileWindow.id, lineIndex, direction)
+												}
 											/>
 										</div>
 									</>

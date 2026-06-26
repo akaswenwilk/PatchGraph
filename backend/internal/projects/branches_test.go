@@ -227,7 +227,7 @@ func TestCompareBranchesReturnsLineDiffs(t *testing.T) {
 	}
 }
 
-func TestCompareBranchesSplitsHunksAndMarksChangedText(t *testing.T) {
+func TestCompareBranchesCollapsesHunksAndMarksChangedText(t *testing.T) {
 	root, id := setupBranchRepo(t)
 	repoPath := filepath.Join(root, "PatchGraph")
 	contents := "one\ntwo()\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\nfifteen\nsixteen\nseventeen\neighteen()\nnineteen\ntwenty\n"
@@ -245,28 +245,42 @@ func TestCompareBranchesSplitsHunksAndMarksChangedText(t *testing.T) {
 		t.Fatalf("CompareBranches() error = %v", err)
 	}
 
-	mainHunks := make([]FileDiff, 0)
+	mainDiffs := make([]FileDiff, 0)
 	for _, file := range comparison.Files {
 		if file.Filename == "main.go" {
-			mainHunks = append(mainHunks, file)
+			mainDiffs = append(mainDiffs, file)
 		}
 	}
-	if len(mainHunks) != 2 {
-		t.Fatalf("main.go hunks = %d, want 2: %#v", len(mainHunks), mainHunks)
+	if len(mainDiffs) != 1 {
+		t.Fatalf("main.go diffs = %d, want 1: %#v", len(mainDiffs), mainDiffs)
 	}
-	if mainHunks[0].HunkIndex != 1 || mainHunks[1].HunkIndex != 2 {
-		t.Fatalf("hunk indexes = %d, %d; want 1, 2", mainHunks[0].HunkIndex, mainHunks[1].HunkIndex)
+	if mainDiffs[0].Header != "2 hunks" {
+		t.Fatalf("main.go header = %q, want 2 hunks", mainDiffs[0].Header)
+	}
+
+	var collapsedLine *DiffLine
+	for index := range mainDiffs[0].Lines {
+		if mainDiffs[0].Lines[index].Kind == "collapsed" {
+			collapsedLine = &mainDiffs[0].Lines[index]
+			break
+		}
+	}
+	if collapsedLine == nil {
+		t.Fatalf("main.go diff has no collapsed line: %#v", mainDiffs[0].Lines)
+	}
+	if len(collapsedLine.Hidden) == 0 {
+		t.Fatalf("collapsed line hidden lines = %#v, want hidden context", collapsedLine.Hidden)
 	}
 
 	var addedLine *DiffLine
-	for index := range mainHunks[0].Lines {
-		if mainHunks[0].Lines[index].Kind == "added" {
-			addedLine = &mainHunks[0].Lines[index]
+	for index := range mainDiffs[0].Lines {
+		if mainDiffs[0].Lines[index].Kind == "added" {
+			addedLine = &mainDiffs[0].Lines[index]
 			break
 		}
 	}
 	if addedLine == nil {
-		t.Fatalf("first hunk has no added line: %#v", mainHunks[0].Lines)
+		t.Fatalf("main.go diff has no added line: %#v", mainDiffs[0].Lines)
 	}
 	if len(addedLine.Changes) != 1 {
 		t.Fatalf("added line changes = %#v, want one changed range", addedLine.Changes)
