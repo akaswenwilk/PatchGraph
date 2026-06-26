@@ -1280,6 +1280,30 @@ function App() {
 		}
 
 		const origin = openFiles.find((fileWindow) => fileWindow.id === originWindowID) ?? null
+
+		// In the branch diff view each file is shown in a single window. Rather than
+		// opening duplicate windows, focus the existing one if the target file is
+		// already open. The regular view keeps cascading new windows.
+		const inDiffView = origin?.diffLines != null
+		if (inDiffView) {
+			const existing = openFiles.find(
+				(fileWindow) => fileWindow.id !== originWindowID && fileWindow.filename === path,
+			)
+			if (existing) {
+				focusFileWindow(existing.id)
+				if (source) {
+					const connectionSource: DotAnchor = {
+						kind: 'dot',
+						windowID: originWindowID,
+						line: source.line,
+						character: source.character,
+					}
+					addConnection(connectionSource, { kind: 'window', windowID: existing.id })
+				}
+				return
+			}
+		}
+
 		// Highlight the definition's first line (cropped views render it at the top)
 		// or, for an un-cropped open, the opened line.
 		const pendingWindow = {
