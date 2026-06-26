@@ -227,6 +227,56 @@ func TestCompareBranchesReturnsLineDiffs(t *testing.T) {
 	}
 }
 
+func TestCompareBranchesSplitsHunksAndMarksChangedText(t *testing.T) {
+	root, id := setupBranchRepo(t)
+	repoPath := filepath.Join(root, "PatchGraph")
+	contents := "one\ntwo()\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\nfifteen\nsixteen\nseventeen\neighteen()\nnineteen\ntwenty\n"
+	writeFile(t, filepath.Join(repoPath, "main.go"), contents)
+	runGit(t, repoPath, "add", "main.go")
+	runGit(t, repoPath, "commit", "-qm", "add main")
+
+	runGit(t, repoPath, "switch", "-c", "feature")
+	changed := "one\ntwo(extra)\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\nfifteen\nsixteen\nseventeen\neighteen(extra)\nnineteen\ntwenty\n"
+	writeFile(t, filepath.Join(repoPath, "main.go"), changed)
+	runGit(t, repoPath, "commit", "-aqm", "edit separated hunks")
+
+	comparison, err := CompareBranches(root, id, "main", "feature")
+	if err != nil {
+		t.Fatalf("CompareBranches() error = %v", err)
+	}
+
+	mainHunks := make([]FileDiff, 0)
+	for _, file := range comparison.Files {
+		if file.Filename == "main.go" {
+			mainHunks = append(mainHunks, file)
+		}
+	}
+	if len(mainHunks) != 2 {
+		t.Fatalf("main.go hunks = %d, want 2: %#v", len(mainHunks), mainHunks)
+	}
+	if mainHunks[0].HunkIndex != 1 || mainHunks[1].HunkIndex != 2 {
+		t.Fatalf("hunk indexes = %d, %d; want 1, 2", mainHunks[0].HunkIndex, mainHunks[1].HunkIndex)
+	}
+
+	var addedLine *DiffLine
+	for index := range mainHunks[0].Lines {
+		if mainHunks[0].Lines[index].Kind == "added" {
+			addedLine = &mainHunks[0].Lines[index]
+			break
+		}
+	}
+	if addedLine == nil {
+		t.Fatalf("first hunk has no added line: %#v", mainHunks[0].Lines)
+	}
+	if len(addedLine.Changes) != 1 {
+		t.Fatalf("added line changes = %#v, want one changed range", addedLine.Changes)
+	}
+	changedText := addedLine.Text[addedLine.Changes[0].Start:addedLine.Changes[0].End]
+	if changedText != "extra" {
+		t.Fatalf("changed text = %q, want extra", changedText)
+	}
+}
+
 func TestPerformBranchActionRejectsUnknownAction(t *testing.T) {
 	root, id := setupBranchRepo(t)
 

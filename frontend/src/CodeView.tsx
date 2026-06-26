@@ -64,6 +64,12 @@ export type DiffLineMeta = {
 	kind: 'context' | 'added' | 'removed'
 	oldLine?: number
 	newLine?: number
+	changes?: DiffLineChange[]
+}
+
+export type DiffLineChange = {
+	start: number
+	end: number
 }
 
 type HighlightResult = {
@@ -168,6 +174,7 @@ export function CodeView({
 				const segments = splitTokensWithMarks(baseTokens, marks)
 				const isFocused = focusLine === index
 				const diffMeta = diffLines?.[index] ?? null
+				const renderedSegments = splitSegmentsWithDiffHighlights(segments, diffMeta?.changes ?? [])
 				const rowClassName = [
 					'code-row',
 					isFocused ? 'code-row-focused' : '',
@@ -190,7 +197,7 @@ export function CodeView({
 					>
 						<span className="line-number">{renderedLineNumber ?? ''}</span>
 						<span className="line-content">
-							{line === '' ? ' ' : segments.map((segment, segmentIndex) => (
+							{line === '' ? ' ' : renderedSegments.map((segment, segmentIndex) => (
 								<CodeSegment
 									key={segmentIndex}
 									segment={segment}
@@ -221,7 +228,7 @@ function CodeSegment({
 	onOpenLocation,
 	onStartConnection,
 }: {
-	segment: LineSegment
+	segment: RenderedLineSegment
 	file: string
 	line: number
 	windowID: string
@@ -234,7 +241,11 @@ function CodeSegment({
 	const tokenRef = useRef<HTMLSpanElement>(null)
 
 	if (!segment.symbol) {
-		return <span style={style}>{segment.content}</span>
+		return (
+			<span className={segment.diffChanged ? 'diff-inline-change' : undefined} style={style}>
+				{segment.content}
+			</span>
+		)
 	}
 
 	const bubbleID = `${windowID}:${line}:${segment.markStart ?? -1}`
@@ -244,7 +255,12 @@ function CodeSegment({
 	return (
 		<span
 			ref={tokenRef}
-			className={open ? 'lsp-token lsp-token-open' : 'lsp-token'}
+			className={[
+				open ? 'lsp-token lsp-token-open' : 'lsp-token',
+				segment.diffChanged ? 'diff-inline-change' : '',
+			]
+				.filter(Boolean)
+				.join(' ')}
 			style={style}
 			role="button"
 			tabIndex={0}
@@ -297,6 +313,63 @@ function CodeSegment({
 			) : null}
 		</span>
 	)
+}
+
+type RenderedLineSegment = LineSegment & {
+	diffChanged?: boolean
+}
+
+function splitSegmentsWithDiffHighlights(
+	segments: LineSegment[],
+	changes: DiffLineChange[],
+): RenderedLineSegment[] {
+	if (changes.length === 0) {
+		return segments
+	}
+
+	const sortedChanges = [...changes].sort((left, right) => left.start - right.start)
+	const rendered: RenderedLineSegment[] = []
+	let offset = 0
+
+	for (const segment of segments) {
+		const segmentStart = offset
+		const segmentEnd = offset + segment.content.length
+		let cursor = segmentStart
+		let bubbleAnchorUsed = false
+
+		const sliceSegment = (start: number, end: number, diffChanged = false): RenderedLineSegment => {
+			const bubbleAnchor = Boolean(segment.bubbleAnchor && !bubbleAnchorUsed && start === segmentStart)
+			if (bubbleAnchor) {
+				bubbleAnchorUsed = true
+			}
+			return {
+				...segment,
+				content: segment.content.slice(start - segmentStart, end - segmentStart),
+				bubbleAnchor,
+				diffChanged,
+			}
+		}
+
+		for (const change of sortedChanges) {
+			if (change.end <= cursor || change.start >= segmentEnd) {
+				continue
+			}
+			const changeStart = Math.max(change.start, cursor)
+			const changeEnd = Math.min(change.end, segmentEnd)
+			if (changeStart > cursor) {
+				rendered.push(sliceSegment(cursor, changeStart))
+			}
+			rendered.push(sliceSegment(changeStart, changeEnd, true))
+			cursor = changeEnd
+		}
+
+		if (cursor < segmentEnd) {
+			rendered.push(sliceSegment(cursor, segmentEnd))
+		}
+		offset = segmentEnd
+	}
+
+	return rendered
 }
 
 const POPOVER_GAP = 8

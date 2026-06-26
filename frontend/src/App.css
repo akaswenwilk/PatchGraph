@@ -521,12 +521,22 @@
 	color: rgba(190, 255, 207, 0.66);
 }
 
+.code-row-added .diff-inline-change {
+	background: rgba(46, 160, 67, 0.48);
+	border-radius: 3px;
+}
+
 .code-row-removed {
 	background: rgba(248, 81, 73, 0.2);
 }
 
 .code-row-removed .line-number {
 	color: rgba(255, 205, 210, 0.66);
+}
+
+.code-row-removed .diff-inline-change {
+	background: rgba(248, 81, 73, 0.42);
+	border-radius: 3px;
 }
 
 @keyframes lsp-focus-flash {

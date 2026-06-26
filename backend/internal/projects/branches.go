@@ -27,9 +27,10 @@ type BranchAction struct {
 	Target string `json:"target"` // merge: branch merged into
 }
 
-// BranchComparison is the file-level diff between two local branches. Lines use
-// one-based old/new line numbers; removed lines have no NewLine, added lines have
-// no OldLine.
+// BranchComparison is the hunk-level diff between two local branches. The Files
+// field is intentionally kept for API compatibility with the frontend's first
+// diff view, but each entry now represents one hunk window. A file with two
+// changed hunks appears twice with the same filename and different HunkIndex.
 type BranchComparison struct {
 	Base    string     `json:"base"`
 	Compare string     `json:"compare"`
@@ -37,17 +38,25 @@ type BranchComparison struct {
 }
 
 type FileDiff struct {
-	Filename string     `json:"filename"`
-	OldPath  string     `json:"oldPath,omitempty"`
-	Status   string     `json:"status"`
-	Lines    []DiffLine `json:"lines"`
+	Filename  string     `json:"filename"`
+	OldPath   string     `json:"oldPath,omitempty"`
+	Status    string     `json:"status"`
+	HunkIndex int        `json:"hunkIndex"`
+	Header    string     `json:"header"`
+	Lines     []DiffLine `json:"lines"`
 }
 
 type DiffLine struct {
-	Kind    string `json:"kind"` // context | added | removed
-	OldLine int    `json:"oldLine,omitempty"`
-	NewLine int    `json:"newLine,omitempty"`
-	Text    string `json:"text"`
+	Kind    string              `json:"kind"` // context | added | removed
+	OldLine int                 `json:"oldLine,omitempty"`
+	NewLine int                 `json:"newLine,omitempty"`
+	Text    string              `json:"text"`
+	Changes []DiffLineHighlight `json:"changes,omitempty"`
+}
+
+type DiffLineHighlight struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 // GitError carries a git command's stderr so it can be surfaced verbatim to the
@@ -193,7 +202,7 @@ func CompareBranches(root, projectID, base, compare string) (BranchComparison, e
 		"--no-ext-diff",
 		"--no-color",
 		"--find-renames",
-		"--unified=100000",
+		"--unified=3",
 		base+".."+compare,
 		"--",
 	)
@@ -210,50 +219,69 @@ func CompareBranches(root, projectID, base, compare string) (BranchComparison, e
 
 func parseUnifiedDiff(output string) []FileDiff {
 	files := make([]FileDiff, 0)
+
+	type fileMeta struct {
+		filename string
+		oldPath  string
+		status   string
+	}
+	meta := fileMeta{status: "modified"}
 	var current *FileDiff
 	oldLine := 0
 	newLine := 0
+	hunkIndex := 0
 
-	flush := func() {
+	flushHunk := func() {
 		if current != nil {
+			markChangedPairs(current.Lines)
 			files = append(files, *current)
 			current = nil
 		}
 	}
 
+	startHunk := func(header string) {
+		flushHunk()
+		hunkIndex++
+		current = &FileDiff{
+			Filename:  meta.filename,
+			OldPath:   meta.oldPath,
+			Status:    meta.status,
+			HunkIndex: hunkIndex,
+			Header:    header,
+		}
+	}
+
 	for _, line := range strings.Split(output, "\n") {
 		if strings.HasPrefix(line, "diff --git ") {
-			flush()
-			current = &FileDiff{Status: "modified"}
+			flushHunk()
+			meta = fileMeta{status: "modified"}
 			oldLine = 0
 			newLine = 0
-			continue
-		}
-		if current == nil {
+			hunkIndex = 0
 			continue
 		}
 
 		switch {
 		case strings.HasPrefix(line, "rename from "):
-			current.OldPath = strings.TrimPrefix(line, "rename from ")
+			meta.oldPath = strings.TrimPrefix(line, "rename from ")
 		case strings.HasPrefix(line, "rename to "):
-			current.Filename = strings.TrimPrefix(line, "rename to ")
-			current.Status = "renamed"
+			meta.filename = strings.TrimPrefix(line, "rename to ")
+			meta.status = "renamed"
 		case strings.HasPrefix(line, "new file mode "):
-			current.Status = "added"
+			meta.status = "added"
 		case strings.HasPrefix(line, "deleted file mode "):
-			current.Status = "deleted"
+			meta.status = "deleted"
 		case strings.HasPrefix(line, "--- "):
 			path := diffPath(strings.TrimPrefix(line, "--- "))
-			if path != "" && current.OldPath == "" {
-				current.OldPath = path
+			if path != "" && meta.oldPath == "" {
+				meta.oldPath = path
 			}
 		case strings.HasPrefix(line, "+++ "):
 			path := diffPath(strings.TrimPrefix(line, "+++ "))
 			if path != "" {
-				current.Filename = path
-			} else if current.Filename == "" {
-				current.Filename = current.OldPath
+				meta.filename = path
+			} else if meta.filename == "" {
+				meta.filename = meta.oldPath
 			}
 		case strings.HasPrefix(line, "@@ "):
 			matches := diffHunkHeader.FindStringSubmatch(line)
@@ -261,21 +289,85 @@ func parseUnifiedDiff(output string) []FileDiff {
 				oldLine, _ = strconv.Atoi(matches[1])
 				newLine, _ = strconv.Atoi(matches[2])
 			}
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			startHunk(line)
+		case current != nil && strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			current.Lines = append(current.Lines, DiffLine{Kind: "added", NewLine: newLine, Text: line[1:]})
 			newLine++
-		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+		case current != nil && strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
 			current.Lines = append(current.Lines, DiffLine{Kind: "removed", OldLine: oldLine, Text: line[1:]})
 			oldLine++
-		case strings.HasPrefix(line, " "):
+		case current != nil && strings.HasPrefix(line, " "):
 			current.Lines = append(current.Lines, DiffLine{Kind: "context", OldLine: oldLine, NewLine: newLine, Text: line[1:]})
 			oldLine++
 			newLine++
 		}
 	}
-	flush()
+	flushHunk()
 
 	return files
+}
+
+func markChangedPairs(lines []DiffLine) {
+	for index := 0; index < len(lines); {
+		if lines[index].Kind != "removed" {
+			index++
+			continue
+		}
+
+		removedStart := index
+		for index < len(lines) && lines[index].Kind == "removed" {
+			index++
+		}
+		addedStart := index
+		for index < len(lines) && lines[index].Kind == "added" {
+			index++
+		}
+		if addedStart == index {
+			continue
+		}
+
+		removedCount := addedStart - removedStart
+		addedCount := index - addedStart
+		pairs := min(removedCount, addedCount)
+		for pair := 0; pair < pairs; pair++ {
+			removedIndex := removedStart + pair
+			addedIndex := addedStart + pair
+			removedChange, addedChange := changedRanges(lines[removedIndex].Text, lines[addedIndex].Text)
+			lines[removedIndex].Changes = removedChange
+			lines[addedIndex].Changes = addedChange
+		}
+	}
+}
+
+func changedRanges(oldText, newText string) ([]DiffLineHighlight, []DiffLineHighlight) {
+	prefix := commonPrefixLen(oldText, newText)
+	oldSuffixStart := len(oldText)
+	newSuffixStart := len(newText)
+	for oldSuffixStart > prefix && newSuffixStart > prefix && oldText[oldSuffixStart-1] == newText[newSuffixStart-1] {
+		oldSuffixStart--
+		newSuffixStart--
+	}
+
+	oldChanges := highlightRange(prefix, oldSuffixStart)
+	newChanges := highlightRange(prefix, newSuffixStart)
+	return oldChanges, newChanges
+}
+
+func commonPrefixLen(left, right string) int {
+	limit := min(len(left), len(right))
+	for index := 0; index < limit; index++ {
+		if left[index] != right[index] {
+			return index
+		}
+	}
+	return limit
+}
+
+func highlightRange(start, end int) []DiffLineHighlight {
+	if end <= start {
+		return nil
+	}
+	return []DiffLineHighlight{{Start: start, End: end}}
 }
 
 func diffPath(path string) string {

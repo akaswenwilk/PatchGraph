@@ -71,6 +71,8 @@ type BranchFileDiff = {
 	filename: string
 	oldPath?: string
 	status: 'added' | 'deleted' | 'modified' | 'renamed'
+	hunkIndex: number
+	header: string
 	lines: BranchDiffLine[]
 }
 
@@ -79,6 +81,12 @@ type BranchDiffLine = {
 	oldLine?: number
 	newLine?: number
 	text: string
+	changes?: DiffLineChange[]
+}
+
+type DiffLineChange = {
+	start: number
+	end: number
 }
 
 type TreeNode = {
@@ -175,6 +183,8 @@ function isBranchFileDiff(value: unknown): value is BranchFileDiff {
 			candidate.status === 'deleted' ||
 			candidate.status === 'modified' ||
 			candidate.status === 'renamed') &&
+		typeof candidate.hunkIndex === 'number' &&
+		typeof candidate.header === 'string' &&
 		Array.isArray(candidate.lines) &&
 		candidate.lines.every(isBranchDiffLine)
 	)
@@ -190,7 +200,23 @@ function isBranchDiffLine(value: unknown): value is BranchDiffLine {
 		(candidate.kind === 'context' || candidate.kind === 'added' || candidate.kind === 'removed') &&
 		(candidate.oldLine === undefined || typeof candidate.oldLine === 'number') &&
 		(candidate.newLine === undefined || typeof candidate.newLine === 'number') &&
-		typeof candidate.text === 'string'
+		typeof candidate.text === 'string' &&
+		(candidate.changes === undefined ||
+			(Array.isArray(candidate.changes) && candidate.changes.every(isDiffLineChange)))
+	)
+}
+
+function isDiffLineChange(value: unknown): value is DiffLineChange {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+
+	const candidate = value as Record<string, unknown>
+	return (
+		typeof candidate.start === 'number' &&
+		typeof candidate.end === 'number' &&
+		candidate.start >= 0 &&
+		candidate.end >= candidate.start
 	)
 }
 
@@ -1004,18 +1030,21 @@ function App() {
 				kind: line.kind,
 				oldLine: line.oldLine,
 				newLine: line.newLine,
+				changes: line.changes,
 			})),
-			title: fileDiff.filename,
-			subtitle: base + ' -> ' + compare + ' · ' + fileDiff.status,
+			title: fileDiff.filename + ' #' + fileDiff.hunkIndex,
+			subtitle: base + ' -> ' + compare + ' · ' + fileDiff.status + ' · ' + fileDiff.header,
 			lspState: fileDiff.status === 'deleted' ? ('unsupported' as LspState) : ('loading' as LspState),
 		}
 		const column = index % 2
 		const row = Math.floor(index / 2)
+		const hunkHeight = Math.min(4000, Math.max(180, 104 + fileDiff.lines.length * 24))
 
 		return {
 			...pendingWindow,
+			height: hunkHeight,
 			x: WINDOW_BASE_X + column * ((pendingWindow.width ?? DEFAULT_WINDOW_WIDTH) + WINDOW_OFFSET_X),
-			y: WINDOW_BASE_Y + row * ((pendingWindow.height ?? DEFAULT_WINDOW_HEIGHT) + WINDOW_OFFSET_Y),
+			y: WINDOW_BASE_Y + row * (hunkHeight + WINDOW_OFFSET_Y),
 		}
 	}
 
