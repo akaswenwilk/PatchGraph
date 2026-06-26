@@ -3,6 +3,7 @@ import './App.css'
 import { CodeView, type DiffLineMeta } from './CodeView'
 import { FuzzyFileSearch, TextSearch } from './SearchPalette'
 import { GitMenu } from './GitMenu'
+import { SettingsMenu } from './SettingsMenu'
 import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
 import { ConnectionsOverlay } from './Connections'
 import {
@@ -569,7 +570,13 @@ function App() {
 	const [isModalOpen, setIsModalOpen] = useState(false)
 	// Which overlay is open over the canvas, if any: fuzzy file finder, global
 	// text search, or the git branch menu. null when none is shown.
-	const [searchMode, setSearchMode] = useState<'file' | 'text' | 'git' | null>(null)
+	const [searchMode, setSearchMode] = useState<'file' | 'text' | 'git' | 'settings' | null>(null)
+	// When true the LSP info list always cascades a new window for an opened
+	// location; when false it jumps to an already-open window for that file and
+	// draws a connector instead. Persisted so the choice survives reloads.
+	const [lspOpensNewWindow, setLspOpensNewWindow] = useState<boolean>(
+		() => localStorage.getItem('patchgraph.lspOpensNewWindow') === 'true',
+	)
 	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
 	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
@@ -656,6 +663,11 @@ function App() {
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
 	}, [isModalOpen])
+
+	// Persist the LSP window-opening preference so it survives reloads.
+	useEffect(() => {
+		localStorage.setItem('patchgraph.lspOpensNewWindow', String(lspOpensNewWindow))
+	}, [lspOpensNewWindow])
 
 	// Global search shortcuts, available once a repo is open: Ctrl/Cmd+P opens the
 	// fuzzy file finder, Ctrl/Cmd+Shift+F opens the global text search. Both are
@@ -1280,6 +1292,32 @@ function App() {
 		}
 
 		const origin = openFiles.find((fileWindow) => fileWindow.id === originWindowID) ?? null
+
+		// Reuse an already-open window for the target file instead of cascading a
+		// duplicate when either: the branch diff view shows one window per file, or
+		// the user has chosen jump-to-existing in settings. Prefer a full-file
+		// window over a cropped definition view. The connector is still drawn.
+		const inDiffView = origin?.diffLines != null
+		if (inDiffView || !lspOpensNewWindow) {
+			const candidates = openFiles.filter(
+				(fileWindow) => fileWindow.id !== originWindowID && fileWindow.filename === path,
+			)
+			const existing = candidates.find((fileWindow) => fileWindow.visibleRange == null) ?? candidates[0] ?? null
+			if (existing) {
+				focusFileWindow(existing.id)
+				if (source) {
+					const connectionSource: DotAnchor = {
+						kind: 'dot',
+						windowID: originWindowID,
+						line: source.line,
+						character: source.character,
+					}
+					addConnection(connectionSource, { kind: 'window', windowID: existing.id })
+				}
+				return
+			}
+		}
+
 		// Highlight the definition's first line (cropped views render it at the top)
 		// or, for an un-cropped open, the opened line.
 		const pendingWindow = {
@@ -1766,6 +1804,15 @@ function App() {
 										<span className="explorer-search-icon" aria-hidden="true">⎇</span>
 										Git
 									</button>
+									<button
+										type="button"
+										className="explorer-search-button explorer-search-button-icon"
+										onClick={() => setSearchMode('settings')}
+										title="Settings"
+										aria-label="Settings"
+									>
+										<span className="explorer-search-icon" aria-hidden="true">⚙</span>
+									</button>
 								</div>
 							) : null}
 
@@ -2081,6 +2128,14 @@ function App() {
 						})
 				}
 			/>
+			) : null}
+
+			{searchMode === 'settings' && activeProject !== null ? (
+				<SettingsMenu
+					lspOpensNewWindow={lspOpensNewWindow}
+					onLspOpensNewWindowChange={setLspOpensNewWindow}
+					onClose={() => setSearchMode(null)}
+				/>
 			) : null}
 		</div>
 	)
