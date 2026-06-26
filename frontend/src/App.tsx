@@ -1293,12 +1293,11 @@ function App() {
 
 		const origin = openFiles.find((fileWindow) => fileWindow.id === originWindowID) ?? null
 
-		// Reuse an already-open window for the target file instead of cascading a
-		// duplicate when either: the branch diff view shows one window per file, or
-		// the user has chosen jump-to-existing in settings. Prefer a full-file
-		// window over a cropped definition view. The connector is still drawn.
-		const inDiffView = origin?.diffLines != null
-		if (inDiffView || !lspOpensNewWindow) {
+		// Unless the user has chosen "always open a new window", reuse an already-open
+		// window for the target file instead of cascading a duplicate, preferring a
+		// full-file window over a cropped definition view. The connector is still
+		// drawn. This setting governs every view, including the branch diff view.
+		if (!lspOpensNewWindow) {
 			const candidates = openFiles.filter(
 				(fileWindow) => fileWindow.id !== originWindowID && fileWindow.filename === path,
 			)
