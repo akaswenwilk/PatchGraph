@@ -105,7 +105,7 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 	await expect(page.locator('.lsp-popover')).toHaveCount(0)
 })
 
-test('opening a definition shows only the definition lines, not the whole file', async ({ page }) => {
+test('opening a definition loads the whole file, scrolled to the declaration', async ({ page }) => {
 	await page.goto('/')
 
 	await openProject(page, /PatchGraph\s+PatchGraph$/)
@@ -130,12 +130,12 @@ test('opening a definition shows only the definition lines, not the whole file',
 		.first()
 		.click()
 
-	// The new window is cropped to just the declaration. The fixture's symbols are
-	// single-line declarations, so the opened window shows exactly one code row —
-	// far fewer than the full source file.
+	// The new window loads the full file (same row count as the source), not a
+	// cropped slice, and highlights the declaration line it was opened at.
 	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
 	const opened = viewers.nth(1)
-	await expect(opened.locator('.code-row')).toHaveCount(1)
+	await expect(opened.locator('.code-row')).toHaveCount(sourceRows)
+	await expect(opened.locator('.code-row-focused')).toHaveCount(1)
 })
 
 test('opening a file from a location draws a connector that clears when the window closes', async ({

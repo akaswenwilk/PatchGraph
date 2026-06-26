@@ -21,11 +21,9 @@ type StartConnection = (source: DotAnchor, clientX: number, clientY: number) => 
 
 // The inclusive line span (zero-based) a window should show, instead of the
 // whole file — used to open a definition as just its own lines.
-type VisibleRange = { start: number; end: number }
-
-// Handler used by location items: open the file at a line, optionally cropped to
-// just the definition's line span.
-type OpenLocation = (path: string, line: number, visibleRange?: VisibleRange | null) => void
+// Handler used by location items: open the file at a line. The whole file is
+// always loaded into the new window; the line is scrolled to and highlighted.
+type OpenLocation = (path: string, line: number) => void
 
 // Handler at the CodeView boundary: also carries the source occurrence (the
 // bubble the location was opened from) so a connector can be drawn from it.
@@ -33,7 +31,6 @@ type OpenLocationFromSymbol = (
 	path: string,
 	line: number,
 	source: { line: number; character: number },
-	visibleRange?: VisibleRange | null,
 ) => void
 
 // The occurrence a popover is being shown for, so its own reference can be
@@ -47,9 +44,6 @@ type CodeViewProps = {
 	symbols?: LspSymbol[]
 	// Zero-based line to scroll to and highlight once content is rendered.
 	focusLine?: number | null
-	// When set, only render this inclusive line span (used to show just a
-	// definition's lines instead of the whole file). Line numbers stay absolute.
-	visibleRange?: VisibleRange | null
 	// Identifies this window so bubble ids are unique across multiple windows.
 	windowID: string
 	// The single open bubble id across the whole app (or null), so opening one
@@ -100,7 +94,6 @@ export function CodeView({
 	diffLines,
 	symbols,
 	focusLine,
-	visibleRange,
 	windowID,
 	openBubble,
 	onBubbleChange,
@@ -174,10 +167,6 @@ export function CodeView({
 	return (
 		<div className="file-code" role="presentation">
 			{lines.map((line, index) => {
-				// Cropped to a definition: render only its lines (numbers stay absolute).
-				if (visibleRange && (index < visibleRange.start || index > visibleRange.end)) {
-					return null
-				}
 				const tokens = highlighted?.[index]
 				const baseTokens: HighlightedToken[] =
 					tokens && tokens.length > 0 ? tokens : [{ content: line, color: undefined }]
@@ -441,16 +430,10 @@ function LspPopover({
 
 	// Opening a location closes this popover and passes the source occurrence
 	// (this bubble) so a connector line can be drawn from it to the new window.
-	// A definition also passes the line span to show (so it opens cropped).
 	const openLocation: OpenLocation | undefined = onOpenLocation
-		? (path, line, visibleRange) => {
+		? (path, line) => {
 				onClose()
-				onOpenLocation(
-					path,
-					line,
-					{ line: current.line, character: current.character },
-					visibleRange,
-				)
+				onOpenLocation(path, line, { line: current.line, character: current.character })
 			}
 		: undefined
 
@@ -535,7 +518,6 @@ function LspPopover({
 				label="Definitions"
 				locations={symbol.definitions}
 				onOpenLocation={openLocation}
-				isDefinition
 			/>
 			<LspLocationGroup
 				label="References"
@@ -559,14 +541,10 @@ function LspLocationGroup({
 	label,
 	locations,
 	onOpenLocation,
-	isDefinition = false,
 }: {
 	label: string
 	locations: LspLocation[]
 	onOpenLocation?: OpenLocation
-	// Definitions open cropped to the declaration's lines; other groups open the
-	// whole file at the line.
-	isDefinition?: boolean
 }) {
 	if (locations.length === 0) {
 		return null
@@ -583,7 +561,6 @@ function LspLocationGroup({
 					key={index}
 					location={location}
 					onOpenLocation={onOpenLocation}
-					isDefinition={isDefinition}
 				/>
 			))}
 			{locations.length > MAX_LOCATIONS_SHOWN ? (
@@ -598,11 +575,9 @@ function LspLocationGroup({
 function LspLocationItem({
 	location,
 	onOpenLocation,
-	isDefinition,
 }: {
 	location: LspLocation
 	onOpenLocation?: OpenLocation
-	isDefinition: boolean
 }) {
 	// Project-relative paths are openable; absolute paths point outside the
 	// project (standard library, dependencies) and cannot be loaded here.
@@ -621,20 +596,11 @@ function LspLocationItem({
 		)
 	}
 
-	// Definitions open showing just the declaration: its full span when the server
-	// reported one (functions, methods, types, classes), otherwise just the line
-	// (local variables, parameters). Other groups open the whole file.
-	const visibleRange = isDefinition
-		? location.defRange
-			? { start: location.defRange.start.line, end: location.defRange.end.line }
-			: { start: line, end: line }
-		: null
-
 	return (
 		<button
 			type="button"
 			className="lsp-popover-location lsp-popover-location-link"
-			onClick={() => onOpenLocation(location.path, line, visibleRange)}
+			onClick={() => onOpenLocation(location.path, line)}
 		>
 			{label}
 		</button>
