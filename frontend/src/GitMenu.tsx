@@ -33,6 +33,7 @@ type BranchActionRequest =
 type PendingAction =
 	| { kind: 'create'; base: string; name: string }
 	| { kind: 'merge'; source: string }
+	| { kind: 'compare'; base: string }
 	| null
 
 type LoadState = 'loading' | 'ready' | 'error'
@@ -45,12 +46,14 @@ export function GitMenu({
 	projectID,
 	onClose,
 	onWorkingTreeChanged,
+	onCompare,
 }: {
 	projectID: string
 	onClose: () => void
 	// Called after an action that mutates the working tree (checkout, merge) so
 	// the explorer can reload the file list for the now-current branch.
 	onWorkingTreeChanged: () => void
+	onCompare: (base: string, compare: string) => Promise<void>
 }) {
 	const [branches, setBranches] = useState<Branch[]>([])
 	const [loadState, setLoadState] = useState<LoadState>('loading')
@@ -201,18 +204,49 @@ export function GitMenu({
 		)
 	}
 
+	async function handleCompareTarget(compare: Branch) {
+		if (pending?.kind !== 'compare') {
+			return
+		}
+		if (compare.name === pending.base) {
+			return
+		}
+
+		setBusy(true)
+		setActionError('')
+		setNotice('')
+		try {
+			await onCompare(pending.base, compare.name)
+		} catch (caught) {
+			setActionError(caught instanceof Error ? caught.message : 'Unknown error')
+		} finally {
+			setBusy(false)
+		}
+	}
+
 	const mergeSource = pending?.kind === 'merge' ? pending.source : null
+	const compareBase = pending?.kind === 'compare' ? pending.base : null
 
 	return (
 		<SearchOverlay
 			title="Git branches"
-			subtitle="Check out, create, delete, or merge local branches."
+			subtitle="Check out, create, delete, merge, or compare local branches."
 			onClose={onClose}
 		>
 			{mergeSource !== null ? (
 				<div className="git-banner git-banner-merge" role="status">
 					<span>
 						Merging <strong>{mergeSource}</strong> into… pick a target branch.
+					</span>
+					<button type="button" className="git-banner-cancel" onClick={() => setPending(null)}>
+						Cancel
+					</button>
+				</div>
+			) : null}
+			{compareBase !== null ? (
+				<div className="git-banner git-banner-compare" role="status">
+					<span>
+						Comparing from <strong>{compareBase}</strong> to… pick a branch.
 					</span>
 					<button type="button" className="git-banner-cancel" onClick={() => setPending(null)}>
 						Cancel
@@ -249,6 +283,7 @@ export function GitMenu({
 								branch={branch}
 								busy={busy}
 								mergeSource={mergeSource}
+								compareBase={compareBase}
 								pending={pending}
 								onCheckout={handleCheckout}
 								onDelete={handleDelete}
@@ -262,7 +297,13 @@ export function GitMenu({
 									setActionError('')
 									setPending({ kind: 'merge', source })
 								}}
+								onStartCompare={(base) => {
+									setNotice('')
+									setActionError('')
+									setPending({ kind: 'compare', base })
+								}}
 								onMergeTarget={handleMergeTarget}
+								onCompareTarget={(compare) => void handleCompareTarget(compare)}
 								onCreateNameChange={(name) =>
 									setPending((previous) =>
 										previous?.kind === 'create' ? { ...previous, name } : previous,
@@ -283,12 +324,15 @@ function BranchRow({
 	branch,
 	busy,
 	mergeSource,
+	compareBase,
 	pending,
 	onCheckout,
 	onDelete,
 	onStartCreate,
 	onStartMerge,
+	onStartCompare,
 	onMergeTarget,
+	onCompareTarget,
 	onCreateNameChange,
 	onCreateSubmit,
 	onCreateCancel,
@@ -296,18 +340,23 @@ function BranchRow({
 	branch: Branch
 	busy: boolean
 	mergeSource: string | null
+	compareBase: string | null
 	pending: PendingAction
 	onCheckout: (branch: Branch) => void
 	onDelete: (branch: Branch) => void
 	onStartCreate: (base: string) => void
 	onStartMerge: (source: string) => void
+	onStartCompare: (base: string) => void
 	onMergeTarget: (branch: Branch) => void
+	onCompareTarget: (branch: Branch) => void
 	onCreateNameChange: (name: string) => void
 	onCreateSubmit: () => void
 	onCreateCancel: () => void
 }) {
 	const isMergeTargetMode = mergeSource !== null
+	const isCompareTargetMode = compareBase !== null
 	const isMergeSource = mergeSource === branch.name
+	const isCompareBase = compareBase === branch.name
 	const isCreatingHere = pending?.kind === 'create' && pending.base === branch.name
 
 	const handleRowClick = () => {
@@ -316,6 +365,10 @@ function BranchRow({
 		}
 		if (isMergeTargetMode) {
 			onMergeTarget(branch)
+			return
+		}
+		if (isCompareTargetMode) {
+			onCompareTarget(branch)
 			return
 		}
 		onCheckout(branch)
@@ -332,12 +385,16 @@ function BranchRow({
 					type="button"
 					className="git-branch-select"
 					onClick={handleRowClick}
-					disabled={busy || (isMergeTargetMode && isMergeSource)}
+					disabled={busy || (isMergeTargetMode && isMergeSource) || (isCompareTargetMode && isCompareBase)}
 					title={
 						isMergeTargetMode
 							? isMergeSource
 								? 'Cannot merge a branch into itself'
 								: `Merge ${mergeSource} into ${branch.name}`
+							: isCompareTargetMode
+								? isCompareBase
+									? 'Cannot compare a branch to itself'
+									: `Compare ${compareBase} to ${branch.name}`
 							: branch.isCurrent
 								? 'Current branch'
 								: `Check out ${branch.name}`
@@ -350,7 +407,7 @@ function BranchRow({
 					{branch.isCurrent ? <span className="git-current-badge">current</span> : null}
 				</button>
 
-				{!isMergeTargetMode ? (
+				{!isMergeTargetMode && !isCompareTargetMode ? (
 					<span className="git-row-actions">
 						<button
 							type="button"
@@ -369,6 +426,15 @@ function BranchRow({
 							title={`Merge ${branch.name} into another branch`}
 						>
 							Merge
+						</button>
+						<button
+							type="button"
+							className="git-action"
+							onClick={() => onStartCompare(branch.name)}
+							disabled={busy}
+							title={`Compare ${branch.name} to another branch`}
+						>
+							Compare
 						</button>
 						<button
 							type="button"

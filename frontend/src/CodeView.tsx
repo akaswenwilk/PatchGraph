@@ -43,6 +43,7 @@ type CurrentOccurrence = { file: string; line: number; character: number }
 type CodeViewProps = {
 	filename: string
 	lines: string[]
+	diffLines?: DiffLineMeta[] | null
 	symbols?: LspSymbol[]
 	// Zero-based line to scroll to and highlight once content is rendered.
 	focusLine?: number | null
@@ -57,6 +58,18 @@ type CodeViewProps = {
 	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocationFromSymbol
 	onStartConnection?: StartConnection
+}
+
+export type DiffLineMeta = {
+	kind: 'context' | 'added' | 'removed'
+	oldLine?: number
+	newLine?: number
+	changes?: DiffLineChange[]
+}
+
+export type DiffLineChange = {
+	start: number
+	end: number
 }
 
 type HighlightResult = {
@@ -74,6 +87,7 @@ type HighlightResult = {
 export function CodeView({
 	filename,
 	lines,
+	diffLines,
 	symbols,
 	focusLine,
 	visibleRange,
@@ -120,10 +134,31 @@ export function CodeView({
 	// Only use tokens that match the lines currently being rendered.
 	const highlighted = result?.source === lines ? result.tokens : null
 
-	const lineMarks = useMemo(
-		() => buildLineMarks(lines, symbols ?? [], filename),
-		[lines, symbols, filename],
-	)
+	const lineMarks = useMemo(() => {
+		if (!diffLines) {
+			return buildLineMarks(lines, symbols ?? [], filename)
+		}
+
+		const newSideLines: string[] = []
+		for (const [displayIndex, meta] of diffLines.entries()) {
+			if (meta.newLine !== undefined) {
+				newSideLines[meta.newLine - 1] = lines[displayIndex]
+			}
+		}
+
+		const sourceMarks = buildLineMarks(newSideLines, symbols ?? [], filename)
+		const remapped = new Map<number, NonNullable<ReturnType<typeof sourceMarks.get>>>()
+		for (const [displayIndex, meta] of diffLines.entries()) {
+			if (meta.newLine === undefined) {
+				continue
+			}
+			const marks = sourceMarks.get(meta.newLine - 1)
+			if (marks) {
+				remapped.set(displayIndex, marks)
+			}
+		}
+		return remapped
+	}, [lines, symbols, filename, diffLines])
 
 	return (
 		<div className="file-code" role="presentation">
@@ -138,21 +173,36 @@ export function CodeView({
 				const marks = lineMarks.get(index) ?? []
 				const segments = splitTokensWithMarks(baseTokens, marks)
 				const isFocused = focusLine === index
+				const diffMeta = diffLines?.[index] ?? null
+				const renderedSegments = splitSegmentsWithDiffHighlights(segments, diffMeta?.changes ?? [])
+				const rowClassName = [
+					'code-row',
+					isFocused ? 'code-row-focused' : '',
+					diffMeta ? `code-row-diff code-row-${diffMeta.kind}` : '',
+				]
+					.filter(Boolean)
+					.join(' ')
+				const renderedLineNumber = diffMeta
+					? diffMeta.kind === 'removed'
+						? diffMeta.oldLine
+						: diffMeta.newLine
+					: index + 1
+				const symbolLine = diffMeta?.newLine === undefined ? index : diffMeta.newLine - 1
 
 				return (
 					<div
-						className={isFocused ? 'code-row code-row-focused' : 'code-row'}
+						className={rowClassName}
 						key={`${filename}:${index + 1}`}
 						ref={isFocused ? focusedRowRef : undefined}
 					>
-						<span className="line-number">{index + 1}</span>
+						<span className="line-number">{renderedLineNumber ?? ''}</span>
 						<span className="line-content">
-							{line === '' ? ' ' : segments.map((segment, segmentIndex) => (
+							{line === '' ? ' ' : renderedSegments.map((segment, segmentIndex) => (
 								<CodeSegment
 									key={segmentIndex}
 									segment={segment}
 									file={filename}
-									line={index}
+									line={symbolLine}
 									windowID={windowID}
 									openBubble={openBubble}
 									onBubbleChange={onBubbleChange}
@@ -178,7 +228,7 @@ function CodeSegment({
 	onOpenLocation,
 	onStartConnection,
 }: {
-	segment: LineSegment
+	segment: RenderedLineSegment
 	file: string
 	line: number
 	windowID: string
@@ -191,7 +241,11 @@ function CodeSegment({
 	const tokenRef = useRef<HTMLSpanElement>(null)
 
 	if (!segment.symbol) {
-		return <span style={style}>{segment.content}</span>
+		return (
+			<span className={segment.diffChanged ? 'diff-inline-change' : undefined} style={style}>
+				{segment.content}
+			</span>
+		)
 	}
 
 	const bubbleID = `${windowID}:${line}:${segment.markStart ?? -1}`
@@ -201,7 +255,12 @@ function CodeSegment({
 	return (
 		<span
 			ref={tokenRef}
-			className={open ? 'lsp-token lsp-token-open' : 'lsp-token'}
+			className={[
+				open ? 'lsp-token lsp-token-open' : 'lsp-token',
+				segment.diffChanged ? 'diff-inline-change' : '',
+			]
+				.filter(Boolean)
+				.join(' ')}
 			style={style}
 			role="button"
 			tabIndex={0}
@@ -254,6 +313,63 @@ function CodeSegment({
 			) : null}
 		</span>
 	)
+}
+
+type RenderedLineSegment = LineSegment & {
+	diffChanged?: boolean
+}
+
+function splitSegmentsWithDiffHighlights(
+	segments: LineSegment[],
+	changes: DiffLineChange[],
+): RenderedLineSegment[] {
+	if (changes.length === 0) {
+		return segments
+	}
+
+	const sortedChanges = [...changes].sort((left, right) => left.start - right.start)
+	const rendered: RenderedLineSegment[] = []
+	let offset = 0
+
+	for (const segment of segments) {
+		const segmentStart = offset
+		const segmentEnd = offset + segment.content.length
+		let cursor = segmentStart
+		let bubbleAnchorUsed = false
+
+		const sliceSegment = (start: number, end: number, diffChanged = false): RenderedLineSegment => {
+			const bubbleAnchor = Boolean(segment.bubbleAnchor && !bubbleAnchorUsed && start === segmentStart)
+			if (bubbleAnchor) {
+				bubbleAnchorUsed = true
+			}
+			return {
+				...segment,
+				content: segment.content.slice(start - segmentStart, end - segmentStart),
+				bubbleAnchor,
+				diffChanged,
+			}
+		}
+
+		for (const change of sortedChanges) {
+			if (change.end <= cursor || change.start >= segmentEnd) {
+				continue
+			}
+			const changeStart = Math.max(change.start, cursor)
+			const changeEnd = Math.min(change.end, segmentEnd)
+			if (changeStart > cursor) {
+				rendered.push(sliceSegment(cursor, changeStart))
+			}
+			rendered.push(sliceSegment(changeStart, changeEnd, true))
+			cursor = changeEnd
+		}
+
+		if (cursor < segmentEnd) {
+			rendered.push(sliceSegment(cursor, segmentEnd))
+		}
+		offset = segmentEnd
+	}
+
+	return rendered
 }
 
 const POPOVER_GAP = 8
