@@ -52,9 +52,6 @@ type OpenFile = {
 	// Zero-based line to scroll to and highlight when the window opens (set when
 	// the window was opened by clicking an LSP location).
 	focusLine: number | null
-	// When set, the window shows only this inclusive line span instead of the
-	// whole file — used to open a definition as just its own lines.
-	visibleRange: { start: number; end: number } | null
 	width: number | null
 	height: number | null
 	x: number
@@ -1054,7 +1051,6 @@ function App() {
 			lspState: 'loading' as LspState,
 			symbols: [],
 			focusLine: null,
-			visibleRange: null,
 			width,
 			height,
 			x,
@@ -1285,7 +1281,6 @@ function App() {
 		path: string,
 		line: number,
 		source?: { line: number; character: number },
-		visibleRange?: { start: number; end: number } | null,
 	) {
 		if (activeProject === null) {
 			return
@@ -1294,14 +1289,13 @@ function App() {
 		const origin = openFiles.find((fileWindow) => fileWindow.id === originWindowID) ?? null
 
 		// Unless the user has chosen "always open a new window", reuse an already-open
-		// window for the target file instead of cascading a duplicate, preferring a
-		// full-file window over a cropped definition view. The connector is still
-		// drawn. This setting governs every view, including the branch diff view.
+		// window for the target file instead of cascading a duplicate. The connector
+		// is still drawn. This setting governs every view, including the diff view.
 		if (!lspOpensNewWindow) {
-			const candidates = openFiles.filter(
-				(fileWindow) => fileWindow.id !== originWindowID && fileWindow.filename === path,
-			)
-			const existing = candidates.find((fileWindow) => fileWindow.visibleRange == null) ?? candidates[0] ?? null
+			const existing =
+				openFiles.find(
+					(fileWindow) => fileWindow.id !== originWindowID && fileWindow.filename === path,
+				) ?? null
 			if (existing) {
 				focusFileWindow(existing.id)
 				if (source) {
@@ -1317,12 +1311,11 @@ function App() {
 			}
 		}
 
-		// Highlight the definition's first line (cropped views render it at the top)
-		// or, for an un-cropped open, the opened line.
+		// The whole file loads into the new window, scrolled to and highlighting the
+		// target line.
 		const pendingWindow = {
 			...createWindow(path, origin),
-			focusLine: visibleRange ? visibleRange.start : line,
-			visibleRange: visibleRange ?? null,
+			focusLine: line,
 		}
 		setOpenFiles((current) => [...current, pendingWindow])
 		setActiveWindowID(pendingWindow.id)
@@ -1932,12 +1925,11 @@ function App() {
 												diffLines={fileWindow.diffLines}
 												symbols={fileWindow.symbols}
 												focusLine={fileWindow.focusLine}
-												visibleRange={fileWindow.visibleRange}
 												windowID={fileWindow.id}
 												openBubble={openBubble}
 												onBubbleChange={setOpenBubble}
-												onOpenLocation={(path, line, source, visibleRange) =>
-													openLocationInNewWindow(fileWindow.id, path, line, source, visibleRange)
+												onOpenLocation={(path, line, source) =>
+													openLocationInNewWindow(fileWindow.id, path, line, source)
 												}
 												onStartConnection={startConnectionDraw}
 												onExpandCollapsedDiff={(lineIndex, direction) =>
