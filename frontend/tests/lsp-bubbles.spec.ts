@@ -39,6 +39,12 @@ test('opening a Go file marks symbols with language-server bubbles', async ({ pa
 	const popover = page.locator('.lsp-popover').first()
 	await expect(popover).toBeVisible()
 	await expect(popover).toContainText('Definitions')
+	const initialWordBox = await markedWord.boundingBox()
+	const initialPopoverBox = await popover.boundingBox()
+	if (initialWordBox === null || initialPopoverBox === null) {
+		throw new Error('Expected marked word and popover bounding boxes')
+	}
+	const initialGap = initialPopoverBox.y - (initialWordBox.y + initialWordBox.height)
 
 	// It is portaled to <body> (overlaying the window, not clipped by its scroll)
 	// and positioned fully within the viewport.
@@ -51,6 +57,31 @@ test('opening a Go file marks symbols with language-server bubbles', async ({ pa
 		expect(popBox.x).toBeGreaterThanOrEqual(-1)
 		expect(popBox.x + popBox.width).toBeLessThanOrEqual(viewport.width + 1)
 	}
+
+	// Ctrl-wheel zoom changes the word's screen rect without scrolling or resizing
+	// the window. The portaled popover should still follow the word.
+	const workspace = page.locator('.workspace')
+	const workspaceBox = await workspace.boundingBox()
+	if (workspaceBox === null) {
+		throw new Error('Expected workspace bounding box')
+	}
+	await page.mouse.move(workspaceBox.x + workspaceBox.width / 2, workspaceBox.y + workspaceBox.height / 2)
+	await page.keyboard.down('Control')
+	await page.mouse.wheel(0, 2000)
+	await page.keyboard.up('Control')
+	await expect
+		.poll(() =>
+			page.locator('.workspace-canvas').evaluate((element) => Number(getComputedStyle(element).zoom)),
+		)
+		.toBeLessThan(0.8)
+
+	const zoomedWordBox = await markedWord.boundingBox()
+	const zoomedPopoverBox = await popover.boundingBox()
+	if (zoomedWordBox === null || zoomedPopoverBox === null) {
+		throw new Error('Expected marked word and popover bounding boxes after zoom')
+	}
+	const zoomedGap = zoomedPopoverBox.y - (zoomedWordBox.y + zoomedWordBox.height)
+	expect(Math.abs(zoomedGap - initialGap)).toBeLessThanOrEqual(2)
 
 	// The popover stays open until explicitly closed via its × button.
 	await viewer.getByRole('heading', { name: 'lib.go' }).hover()
@@ -105,7 +136,7 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 	await expect(page.locator('.lsp-popover')).toHaveCount(0)
 })
 
-test('opening a definition loads the whole file, scrolled to the declaration', async ({ page }) => {
+test('opening a definition loads the full file with non-target context collapsed', async ({ page }) => {
 	await page.goto('/')
 
 	await openProject(page, /PatchGraph\s+PatchGraph$/)
@@ -130,12 +161,18 @@ test('opening a definition loads the whole file, scrolled to the declaration', a
 		.first()
 		.click()
 
-	// The new window loads the full file (same row count as the source), not a
-	// cropped slice, and highlights the declaration line it was opened at.
+	// The new window keeps the target visible immediately, but retains the rest of
+	// the file behind expandable collapsed rows instead of cropping it away.
 	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
 	const opened = viewers.nth(1)
-	await expect(opened.locator('.code-row')).toHaveCount(sourceRows)
+	const collapsedRows = opened.locator('.code-row-collapsed')
+	await expect(collapsedRows.first()).toBeVisible()
 	await expect(opened.locator('.code-row-focused')).toHaveCount(1)
+
+	while ((await collapsedRows.count()) > 0) {
+		await collapsedRows.first().locator('.diff-expand-button').first().click()
+	}
+	await expect(opened.locator('.code-row')).toHaveCount(sourceRows)
 })
 
 test('opening a file from a location draws a connector that clears when the window closes', async ({

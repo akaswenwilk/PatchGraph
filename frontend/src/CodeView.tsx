@@ -12,6 +12,7 @@ import {
 	splitTokensWithMarks,
 	type LineSegment,
 	type LspLocation,
+	type LspRange,
 	type LspSymbol,
 } from './lsp'
 import type { DotAnchor } from './connectionGeometry'
@@ -19,17 +20,16 @@ import type { DotAnchor } from './connectionGeometry'
 // Begin dragging a new connector from a bubble dot.
 type StartConnection = (source: DotAnchor, clientX: number, clientY: number) => void
 
-// The inclusive line span (zero-based) a window should show, instead of the
-// whole file — used to open a definition as just its own lines.
 // Handler used by location items: open the file at a line. The whole file is
 // always loaded into the new window; the line is scrolled to and highlighted.
-type OpenLocation = (path: string, line: number) => void
+type OpenLocation = (path: string, line: number, range?: LspRange) => void
 
 // Handler at the CodeView boundary: also carries the source occurrence (the
 // bubble the location was opened from) so a connector can be drawn from it.
 type OpenLocationFromSymbol = (
 	path: string,
 	line: number,
+	range: LspRange | undefined,
 	source: { line: number; character: number },
 ) => void
 
@@ -46,6 +46,8 @@ type CodeViewProps = {
 	focusLine?: number | null
 	// Identifies this window so bubble ids are unique across multiple windows.
 	windowID: string
+	// Current canvas zoom, used to keep portaled popovers anchored while zooming.
+	zoom: number
 	// The single open bubble id across the whole app (or null), so opening one
 	// closes any other.
 	openBubble: string | null
@@ -95,6 +97,7 @@ export function CodeView({
 	symbols,
 	focusLine,
 	windowID,
+	zoom,
 	openBubble,
 	onBubbleChange,
 	onOpenLocation,
@@ -239,6 +242,7 @@ export function CodeView({
 									file={filename}
 									line={symbolLine}
 									windowID={windowID}
+									zoom={zoom}
 									openBubble={openBubble}
 									onBubbleChange={onBubbleChange}
 									onOpenLocation={onOpenLocation}
@@ -258,6 +262,7 @@ function CodeSegment({
 	file,
 	line,
 	windowID,
+	zoom,
 	openBubble,
 	onBubbleChange,
 	onOpenLocation,
@@ -267,6 +272,7 @@ function CodeSegment({
 	file: string
 	line: number
 	windowID: string
+	zoom: number
 	openBubble: string | null
 	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocationFromSymbol
@@ -340,6 +346,7 @@ function CodeSegment({
 							symbol={segment.symbol}
 							current={{ file, line, character: segment.markStart ?? -1 }}
 							anchorRef={tokenRef}
+							zoom={zoom}
 							onClose={() => onBubbleChange(null)}
 							onOpenLocation={onOpenLocation}
 						/>
@@ -414,12 +421,14 @@ function LspPopover({
 	symbol,
 	current,
 	anchorRef,
+	zoom,
 	onClose,
 	onOpenLocation,
 }: {
 	symbol: LspSymbol
 	current: CurrentOccurrence
 	anchorRef: React.RefObject<HTMLElement | null>
+	zoom: number
 	onClose: () => void
 	onOpenLocation?: OpenLocationFromSymbol
 }) {
@@ -431,9 +440,9 @@ function LspPopover({
 	// Opening a location closes this popover and passes the source occurrence
 	// (this bubble) so a connector line can be drawn from it to the new window.
 	const openLocation: OpenLocation | undefined = onOpenLocation
-		? (path, line) => {
+		? (path, line, range) => {
 				onClose()
-				onOpenLocation(path, line, { line: current.line, character: current.character })
+				onOpenLocation(path, line, range, { line: current.line, character: current.character })
 			}
 		: undefined
 
@@ -484,7 +493,7 @@ function LspPopover({
 			window.removeEventListener('scroll', reposition, true)
 			window.removeEventListener('resize', reposition)
 		}
-	}, [anchorRef, symbol, references.length])
+	}, [anchorRef, symbol, references.length, zoom])
 
 	return createPortal(
 		// Stop clicks inside the popover from toggling the token open state.
@@ -600,7 +609,7 @@ function LspLocationItem({
 		<button
 			type="button"
 			className="lsp-popover-location lsp-popover-location-link"
-			onClick={() => onOpenLocation(location.path, line)}
+			onClick={() => onOpenLocation(location.path, line, location.defRange)}
 		>
 			{label}
 		</button>
