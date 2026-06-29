@@ -51,13 +51,21 @@ function nearestBorderPoint(rect: DOMRect, toward: Point): Point {
 }
 
 // A dot's screen point, plus whether it is still visible inside its window's
-// code viewport (a connector to a dot scrolled out of view is dropped).
+// code viewport. A dot that is hidden or scrolled out of view is reported as
+// not in view so the connector can fall back to the window border.
 function dotPoint(anchor: DotAnchor): { point: Point; inView: boolean } | null {
 	const element = document.querySelector(dotSelector(anchor))
 	if (!element) {
 		return null
 	}
-	const point = rectCenter(element.getBoundingClientRect())
+	const rect = element.getBoundingClientRect()
+	// A collapsed window hides its code body with display:none, which yields a
+	// zero-sized rect at the origin. Treat that as out of view so the connector
+	// attaches to the window border instead of snapping to (0,0).
+	if (rect.width === 0 && rect.height === 0) {
+		return { point: rectCenter(rect), inView: false }
+	}
+	const point = rectCenter(rect)
 	const scroller = element.closest('.file-window')?.querySelector('.file-code-scroll')
 	let inView = true
 	if (scroller) {
@@ -85,25 +93,55 @@ export function sourcePoint(anchor: DotAnchor): Point | null {
 	return resolved ? resolved.point : null
 }
 
-// Resolve a committed connection's endpoints, or null if it should be removed
-// (an endpoint element is gone, or a dot endpoint scrolled out of its window).
-export function resolveConnection(connection: Connection): Segment | null {
-	const source = dotPoint(connection.source)
-	if (!source || !source.inView) {
-		return null
-	}
-	if (connection.target.kind === 'dot') {
-		const target = dotPoint(connection.target)
-		if (!target || !target.inView) {
-			return null
+// A resolved endpoint is either an exact dot point (dot present and in view) or
+// a request to attach to the window's border (dot hidden/scrolled away, or a
+// window-kind anchor). null means the window itself is gone (closed) and the
+// connection should be removed.
+type ResolvedEndpoint = { point: Point } | { rect: DOMRect } | null
+
+// Resolve one endpoint. A dot endpoint keeps its exact point while the dot is
+// visible; once the dot is hidden (collapsed window) or scrolled out of view it
+// falls back to the window border so the connector stays attached to the window.
+// Returns null only when the window element no longer exists.
+function resolveEndpoint(anchor: Anchor): ResolvedEndpoint {
+	if (anchor.kind === 'dot') {
+		const resolved = dotPoint(anchor)
+		if (resolved && resolved.inView) {
+			return { point: resolved.point }
 		}
-		return { sx: source.point.x, sy: source.point.y, tx: target.point.x, ty: target.point.y }
 	}
-	const target = anchorPoint(connection.target, source.point)
-	if (!target) {
+	const element = windowElement(anchor.windowID)
+	return element ? { rect: element.getBoundingClientRect() } : null
+}
+
+// The reference point used to aim the *other* endpoint's border attachment: a
+// dot point uses itself, a window fallback uses its center.
+function endpointReference(endpoint: { point: Point } | { rect: DOMRect }): Point {
+	return 'point' in endpoint ? endpoint.point : rectCenter(endpoint.rect)
+}
+
+// The final screen point for an endpoint: the exact dot point, or the window
+// border point nearest the other endpoint.
+function endpointFinalPoint(
+	endpoint: { point: Point } | { rect: DOMRect },
+	toward: Point,
+): Point {
+	return 'point' in endpoint ? endpoint.point : nearestBorderPoint(endpoint.rect, toward)
+}
+
+// Resolve a committed connection's endpoints, or null if it should be removed
+// (a window endpoint no longer exists because the window was closed). Endpoints
+// whose dot is hidden or scrolled away attach to the window border instead of
+// being dropped, and reattach to the dot automatically once it is visible again.
+export function resolveConnection(connection: Connection): Segment | null {
+	const source = resolveEndpoint(connection.source)
+	const target = resolveEndpoint(connection.target)
+	if (!source || !target) {
 		return null
 	}
-	return { sx: source.point.x, sy: source.point.y, tx: target.x, ty: target.y }
+	const sourcePoint = endpointFinalPoint(source, endpointReference(target))
+	const targetPoint = endpointFinalPoint(target, endpointReference(source))
+	return { sx: sourcePoint.x, sy: sourcePoint.y, tx: targetPoint.x, ty: targetPoint.y }
 }
 
 // findSnapAnchor returns the dot or window nearest to point (within
