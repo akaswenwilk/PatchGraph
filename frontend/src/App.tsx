@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import './App.css'
 import { CodeView, type DiffLineMeta } from './CodeView'
 import { FuzzyFileSearch, TextSearch } from './SearchPalette'
@@ -1661,8 +1661,8 @@ function App() {
 
 	function startWindowDrag(windowID: string, event: React.PointerEvent<HTMLElement>) {
 		// Let the header controls (collapse/close) keep their own click; don't hijack
-		// them into a drag.
-		if ((event.target as HTMLElement).closest('.file-window-control-button')) {
+		// them into a drag. The filename is selectable text, so it also opts out.
+		if ((event.target as HTMLElement).closest('.file-window-control-button, .file-window-title')) {
 			return
 		}
 
@@ -1995,7 +1995,14 @@ function App() {
 			<main className="workspace" ref={workspaceRef}>
 				<div
 					className="workspace-canvas"
-					style={{ width: canvasWidth + 'px', height: canvasHeight + 'px', zoom }}
+					style={
+						{
+							width: canvasWidth + 'px',
+							height: canvasHeight + 'px',
+							zoom,
+							'--patchgraph-title-font-size': 1.15 / zoom + 'rem',
+						} as CSSProperties
+					}
 				>
 				{/*
 					Render in stable insertion order and let each window's CSS `z-index`
@@ -2034,13 +2041,13 @@ function App() {
 								{fileWindow.state === 'loading' ? (
 									<div className="workspace-placeholder">
 										<p className="workspace-eyebrow">Opening file</p>
-										<h2>{fileWindow.filename}</h2>
+										<h2 className="file-window-title">{fileWindow.filename}</h2>
 										<p>Loading file contents…</p>
 									</div>
 								) : fileWindow.state === 'error' ? (
 									<div className="workspace-placeholder workspace-placeholder-error">
 										<p className="workspace-eyebrow">File error</p>
-										<h2>{fileWindow.filename}</h2>
+										<h2 className="file-window-title">{fileWindow.filename}</h2>
 										<p>{fileWindow.error}</p>
 									</div>
 								) : (
@@ -2056,7 +2063,9 @@ function App() {
 											<div className="file-window-title-group">
 												<div>
 													<p className="workspace-eyebrow">{activeProject?.name ?? ''}</p>
-													<h2>{fileWindow.title ?? fileWindow.filename}</h2>
+													<h2 className="file-window-title" title={fileWindow.filename}>
+														{fileWindow.title ?? fileWindow.filename}
+													</h2>
 												</div>
 												<div className="file-window-meta">
 													<p>{fileWindow.subtitle ?? fileWindow.lines.length + ' lines'}</p>
