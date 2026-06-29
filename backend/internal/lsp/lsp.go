@@ -108,7 +108,7 @@ func LanguageForFile(name string) (command []string, languageID string, ok bool)
 // maxAnalyzedTokens bounds how many identifier tokens a single file analysis
 // will resolve, so a pathologically large file can't fan out into an unbounded
 // number of language-server queries.
-const maxAnalyzedTokens = 2000
+const maxAnalyzedTokens = 5000
 
 // Analyze launches the language server, opens absFile, enumerates every
 // identifier in it, and collects the definitions, references, and
