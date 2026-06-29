@@ -25,6 +25,12 @@ func TestLanguageForFile(t *testing.T) {
 		{"util.mts", "typescript-language-server", "typescript", true},
 		{"index.js", "typescript-language-server", "javascript", true},
 		{"widget.jsx", "typescript-language-server", "javascriptreact", true},
+		{"app.rb", "ruby-lsp", "ruby", true},
+		{"tasks/build.rake", "ruby-lsp", "ruby", true},
+		{"patchgraph.gemspec", "ruby-lsp", "ruby", true},
+		{"config.ru", "ruby-lsp", "ruby", true},
+		{"Gemfile", "ruby-lsp", "ruby", true},
+		{"Rakefile", "ruby-lsp", "ruby", true},
 		{"README.md", "", "", false},
 		{"noext", "", "", false},
 	}
@@ -393,6 +399,46 @@ func Use() string {
 	}
 	if len(sprintf.References) == 0 {
 		t.Error("Sprintf should keep its in-repo call-site reference")
+	}
+}
+
+// TestAnalyzeWithRubyLSP is an end-to-end check that requires ruby-lsp to be
+// installed. It is skipped on hosts without Ruby tooling.
+func TestAnalyzeWithRubyLSP(t *testing.T) {
+	if _, err := exec.LookPath("ruby-lsp"); err != nil {
+		t.Skip("ruby-lsp not installed")
+	}
+
+	root := t.TempDir()
+	source := `class Greeter
+  def greet
+    "hi"
+  end
+end
+
+def use
+  Greeter.new.greet
+end
+`
+	absFile := filepath.Join(root, "sample.rb")
+	writeTestFile(t, absFile, source)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	analysis, err := Analyze(ctx, root, absFile, "ruby", []string{"ruby-lsp"})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	if analysis.File != "sample.rb" {
+		t.Errorf("File = %q, want sample.rb", analysis.File)
+	}
+	if analysis.Language != "ruby" {
+		t.Errorf("Language = %q, want ruby", analysis.Language)
+	}
+	if len(analysis.Symbols) == 0 {
+		t.Fatal("expected at least one symbol")
 	}
 }
 

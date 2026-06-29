@@ -17,11 +17,17 @@ WORKDIR /app
 
 # git: existing runtime dependency.
 # nodejs/npm: required to run the TypeScript language server.
+# ruby/ruby-dev: required to install and run the Ruby language server.
 # The go toolchain (from the golang base image) is required by gopls at runtime.
-RUN apk add --no-cache git nodejs npm
+RUN apk add --no-cache git nodejs npm ruby ruby-dev
 
 # Install the TypeScript language server (and the typescript it depends on) globally.
 RUN npm install -g typescript@5.8.3 typescript-language-server@4.3.4
+
+# Install the Ruby language server.
+RUN apk add --no-cache --virtual .ruby-build-deps build-base \
+	&& gem install ruby-lsp --no-document \
+	&& apk del .ruby-build-deps
 
 COPY --from=build /patchgraph-server /usr/local/bin/patchgraph-server
 COPY --from=build /go/bin/gopls /usr/local/bin/gopls
