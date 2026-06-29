@@ -128,9 +128,6 @@ const MAX_ZOOM = 3
 // uniform at every scale.
 const ZOOM_WHEEL_SENSITIVITY = 0.0015
 const TITLE_BASE_FONT_SIZE_REM = 1.15
-const TITLE_LINE_HEIGHT = 1.35
-const CSS_REM_IN_PX = 16
-const TITLE_BASE_LINE_HEIGHT = TITLE_BASE_FONT_SIZE_REM * CSS_REM_IN_PX * TITLE_LINE_HEIGHT
 // Fixed-size overview map pinned at the top-right. The whole logical canvas is
 // scaled to fit inside this box (aspect preserved), windows are drawn as little
 // rectangles, and the current viewport is outlined; clicking/dragging in it pans
@@ -146,18 +143,13 @@ function readableTitleScale(zoom: number) {
 	return Math.max(1, 1 / zoom)
 }
 
-function titleHeaderExtraHeight(zoom: number) {
-	return TITLE_BASE_LINE_HEIGHT * (readableTitleScale(zoom) - 1)
-}
-
-function renderedWindowWidth(fileWindow: OpenFile, zoom: number) {
-	const width = fileWindow.width ?? DEFAULT_WINDOW_WIDTH
-	return width * readableTitleScale(zoom)
+function renderedWindowWidth(fileWindow: OpenFile) {
+	return fileWindow.width ?? DEFAULT_WINDOW_WIDTH
 }
 
 function renderedWindowHeight(fileWindow: OpenFile, zoom: number) {
 	const height = fileWindow.height ?? DEFAULT_WINDOW_HEIGHT
-	return fileWindow.collapsed ? height : height + titleHeaderExtraHeight(zoom)
+	return fileWindow.collapsed ? height : height * readableTitleScale(zoom)
 }
 
 function isProjectSummary(value: unknown): value is ProjectSummary {
@@ -644,7 +636,7 @@ function Minimap({
 							style={{
 								left: `${(fileWindow.x + offsetX) * scale}px`,
 								top: `${(fileWindow.y + offsetY) * scale}px`,
-								width: `${renderedWindowWidth(fileWindow, zoom) * scale}px`,
+								width: `${renderedWindowWidth(fileWindow) * scale}px`,
 								height: `${renderedWindowHeight(fileWindow, zoom) * scale}px`,
 							}}
 						>
@@ -1651,22 +1643,18 @@ function App() {
 					// unscaled units so stored width/height stay in canvas space.
 					const scale = zoomRef.current
 					const titleScale = readableTitleScale(scale)
-					const headerExtraHeight = titleHeaderExtraHeight(scale)
-					const currentWidth = fileWindow.width ?? rect.width / scale / titleScale
-					const currentHeight = fileWindow.height ?? rect.height / scale - headerExtraHeight
+					const currentWidth = fileWindow.width ?? rect.width / scale
+					const currentHeight = fileWindow.height ?? rect.height / scale / titleScale
 					const nextWidth =
 						direction === 'vertical'
 							? currentWidth
-							: Math.min(
-									maxWidth,
-									Math.max(minWidth, (event.clientX - rect.left) / scale / titleScale),
-								)
+							: Math.min(maxWidth, Math.max(minWidth, (event.clientX - rect.left) / scale))
 					const nextHeight =
 						direction === 'horizontal'
 							? currentHeight
 							: Math.min(
 									maxHeight,
-									Math.max(minHeight, (event.clientY - rect.top) / scale - headerExtraHeight),
+									Math.max(minHeight, (event.clientY - rect.top) / scale / titleScale),
 								)
 
 					return {
@@ -1860,7 +1848,7 @@ function App() {
 	const minX = openFiles.reduce((min, fileWindow) => Math.min(min, fileWindow.x), 0)
 	const minY = openFiles.reduce((min, fileWindow) => Math.min(min, fileWindow.y), 0)
 	const maxX = openFiles.reduce(
-		(max, fileWindow) => Math.max(max, fileWindow.x + renderedWindowWidth(fileWindow, zoom)),
+		(max, fileWindow) => Math.max(max, fileWindow.x + renderedWindowWidth(fileWindow)),
 		0,
 	)
 	const maxY = openFiles.reduce(
@@ -2030,7 +2018,7 @@ function App() {
 							width: canvasWidth + 'px',
 							height: canvasHeight + 'px',
 							zoom,
-							'--patchgraph-title-font-size': 1.15 / zoom + 'rem',
+							'--patchgraph-title-font-size': TITLE_BASE_FONT_SIZE_REM / zoom + 'rem',
 						} as CSSProperties
 					}
 				>
@@ -2058,7 +2046,7 @@ function App() {
 								data-window-id={fileWindow.id}
 								aria-label={`File viewer for ${fileWindow.filename}`}
 								style={{
-									width: renderedWindowWidth(fileWindow, zoom) + 'px',
+									width: renderedWindowWidth(fileWindow) + 'px',
 									// Collapsed: height is driven by the header alone; the body is hidden.
 									height: fileWindow.collapsed
 										? 'auto'
