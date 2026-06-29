@@ -106,6 +106,71 @@ test('resizing the file viewer changes its size without changing code text size'
 		.toBe(beforeFontSize)
 })
 
+test('file window titles stay readable when zoomed out and remain selectable', async ({
+	page,
+}) => {
+	await page.goto('/')
+
+	await openProject(page, /PatchGraph\s+PatchGraph$/)
+	await page.getByRole('button', { name: /base\.txt/ }).click()
+
+	const viewer = page.getByRole('region', { name: 'File viewer for base.txt' })
+	const title = viewer.locator('.file-window-title')
+	const codeLine = page.locator('.code-row').first().locator('.line-content')
+	const workspace = page.locator('.workspace')
+
+	await expect(viewer).toBeVisible()
+	await expect(title).toHaveText('base.txt')
+
+	const titleBefore = await title.boundingBox()
+	const codeBefore = await codeLine.boundingBox()
+	if (titleBefore === null || codeBefore === null) {
+		throw new Error('Expected title and code bounding boxes before zoom')
+	}
+
+	const workspaceBox = await workspace.boundingBox()
+	if (workspaceBox === null) {
+		throw new Error('Expected workspace bounding box')
+	}
+
+	await page.mouse.move(workspaceBox.x + workspaceBox.width / 2, workspaceBox.y + workspaceBox.height / 2)
+	await page.keyboard.down('Control')
+	await page.mouse.wheel(0, 2000)
+	await page.keyboard.up('Control')
+
+	await expect
+		.poll(() =>
+			page.locator('.workspace-canvas').evaluate((element) => Number(getComputedStyle(element).zoom)),
+		)
+		.toBeLessThan(0.8)
+
+	const titleAfter = await title.boundingBox()
+	const codeAfter = await codeLine.boundingBox()
+	if (titleAfter === null || codeAfter === null) {
+		throw new Error('Expected title and code bounding boxes after zoom')
+	}
+
+	expect(titleAfter.height).toBeGreaterThan(titleBefore.height * 0.8)
+	expect(codeAfter.height).toBeLessThan(codeBefore.height * 0.8)
+
+	const selectableTitle = await title.boundingBox()
+	if (selectableTitle === null) {
+		throw new Error('Expected selectable title bounding box')
+	}
+	await page.mouse.move(selectableTitle.x + 2, selectableTitle.y + selectableTitle.height / 2)
+	await page.mouse.down()
+	await page.mouse.move(
+		selectableTitle.x + selectableTitle.width - 2,
+		selectableTitle.y + selectableTitle.height / 2,
+		{ steps: 8 },
+	)
+	await page.mouse.up()
+
+	await expect
+		.poll(() => page.evaluate(() => window.getSelection?.()?.toString() ?? ''))
+		.toContain('base.txt')
+})
+
 test('dragging a window header moves it and expands the scrollable canvas', async ({
 	page,
 }) => {

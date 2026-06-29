@@ -14,6 +14,7 @@
 	position: relative;
 	min-width: 100%;
 	min-height: 100%;
+	--patchgraph-title-font-size: 1.15rem;
 }
 
 .sidebar {
@@ -457,12 +458,23 @@
 	flex: 1;
 }
 
+.file-window-title-group > div:first-child {
+	min-width: 0;
+}
+
 .file-window-header h2,
 .workspace-placeholder h2 {
 	margin: 0;
-	font-size: 1.15rem;
+	font-size: var(--patchgraph-title-font-size);
 	font-weight: 620;
 	line-height: 1.35;
+}
+
+.file-window-title {
+	overflow-wrap: anywhere;
+	cursor: text;
+	user-select: text;
+	-webkit-user-select: text;
 }
 
 .file-window-header p,
