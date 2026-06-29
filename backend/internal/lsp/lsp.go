@@ -2,8 +2,8 @@
 // definitions, references, and implementations for every symbol in a file.
 //
 // It speaks JSON-RPC 2.0 over a language server's stdio using only the standard
-// library, and currently knows how to launch gopls (Go) and
-// typescript-language-server (TypeScript/JavaScript).
+// library, and currently knows how to launch gopls (Go),
+// typescript-language-server (TypeScript/JavaScript), and ruby-lsp (Ruby).
 package lsp
 
 import (
@@ -86,12 +86,26 @@ type FileAnalysis struct {
 
 var tsServer = []string{"typescript-language-server", "--stdio"}
 
+var rubyFilenames = map[string]struct{}{
+	"capfile":   {},
+	"gemfile":   {},
+	"guardfile": {},
+	"rakefile":  {},
+}
+
 // LanguageForFile maps a filename to the language server command and the LSP
 // languageId to advertise. ok is false when the extension is unsupported.
 func LanguageForFile(name string) (command []string, languageID string, ok bool) {
+	base := strings.ToLower(filepath.Base(name))
+	if _, ruby := rubyFilenames[base]; ruby {
+		return []string{"ruby-lsp"}, "ruby", true
+	}
+
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".go":
 		return []string{"gopls", "serve"}, "go", true
+	case ".rb", ".rake", ".gemspec", ".ru":
+		return []string{"ruby-lsp"}, "ruby", true
 	case ".ts", ".mts", ".cts":
 		return tsServer, "typescript", true
 	case ".tsx":
@@ -421,7 +435,7 @@ func (c *client) readLoop() {
 
 // handleServerRequest answers server-to-client requests. We do not implement
 // any real client capabilities, so we return empty/default results, which is
-// enough to keep gopls and typescript-language-server progressing.
+// enough to keep gopls, typescript-language-server, and ruby-lsp progressing.
 func (c *client) handleServerRequest(msg rpcMessage) {
 	var result any
 	if msg.Method == "workspace/configuration" {
