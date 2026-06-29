@@ -210,55 +210,72 @@ test('collapsing a window keeps its connector attached to the window border, and
 	await openProject(page, /PatchGraph\s+PatchGraph$/)
 	await page.getByRole('button', { name: /lib\.go/ }).click()
 
-	const viewer = page.getByRole('region', { name: 'File viewer for lib.go' })
-	await expect(viewer.locator('.file-window-lsp-ready')).toBeVisible({ timeout: LSP_TIMEOUT })
+	const viewers = page.getByRole('region', { name: 'File viewer for lib.go' })
+	await expect(viewers.first().locator('.file-window-lsp-ready')).toBeVisible({
+		timeout: LSP_TIMEOUT,
+	})
 
-	const dots = page.locator('.lsp-bubble-dot')
-	await expect(dots.nth(1)).toBeVisible({ timeout: LSP_TIMEOUT })
-	const a = await dots.nth(0).boundingBox()
-	const b = await dots.nth(1).boundingBox()
-	if (a === null || b === null) {
-		throw new Error('Expected two bubble dots')
-	}
+	// Open a definition in a second window, which draws a connector from the
+	// source dot (in the first window) to the new window.
+	await viewers.first().locator('.lsp-token').first().click()
+	await page.locator('.lsp-popover-location-link').first().click()
+	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
 
-	// Draw a connector between two dots in the same window.
-	const line = page.locator('.connections-overlay .connection-line').first()
-	await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
-	await page.mouse.down()
-	await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 })
-	await page.mouse.up()
-	await expect(line).toBeVisible()
+	// The connector exists. (An axis-aligned SVG <line> has a zero-area bounding
+	// box, so Playwright's toBeVisible heuristic is unreliable here; assert on
+	// count and on client-rect geometry instead.)
+	const lines = page.locator('.connections-overlay .connection-line')
+	await expect(lines).toHaveCount(1)
+	const line = lines.first()
 
-	// Collapse the window: the connector must survive (it is only removed on
-	// explicit delete or window close) and attach to the window border rather
-	// than snapping to the canvas origin.
-	await viewer.getByRole('button', { name: /^Collapse / }).click()
-	await expect(viewer).toHaveClass(/file-window-collapsed/)
-	await expect(line).toHaveCount(1)
-	await expect(line).toBeVisible()
+	// Reads the connector's client-space endpoints (getBoundingClientRect works
+	// regardless of the axis-aligned visibility heuristic).
+	const lineRect = () =>
+		line.evaluate((el) => {
+			const r = el.getBoundingClientRect()
+			return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+		})
 
-	const windowBox = await viewer.boundingBox()
+	// Collapse the source window: the connector must survive (it is only removed
+	// on explicit delete or window close) and attach to that window's border
+	// rather than snapping to the canvas origin.
+	const source = viewers.first()
+	await source.getByRole('button', { name: /^Collapse / }).click()
+	await expect(source).toHaveClass(/file-window-collapsed/)
+	await expect(lines).toHaveCount(1)
+
+	const windowBox = await source.boundingBox()
 	if (windowBox === null) {
 		throw new Error('Expected the collapsed window to have a bounding box')
 	}
-	// The connector (in client coordinates) must stay on the collapsed window, not
-	// snap to the canvas origin. Its rendered rect should overlap the window rect.
-	const lineBox = await line.boundingBox()
-	if (lineBox === null) {
-		throw new Error('Expected the connector to have a bounding box')
-	}
+	// The connector must stay on the collapsed window, not snap to the canvas
+	// origin: its client rect should overlap the window's rect.
+	const collapsedRect = await lineRect()
 	const overlapsWindow =
-		lineBox.x <= windowBox.x + windowBox.width &&
-		lineBox.x + lineBox.width >= windowBox.x &&
-		lineBox.y <= windowBox.y + windowBox.height &&
-		lineBox.y + lineBox.height >= windowBox.y
+		collapsedRect.left <= windowBox.x + windowBox.width &&
+		collapsedRect.right >= windowBox.x &&
+		collapsedRect.top <= windowBox.y + windowBox.height &&
+		collapsedRect.bottom >= windowBox.y
 	expect(overlapsWindow).toBe(true)
 
-	// Expanding restores the window; the connector remains a single line.
-	await viewer.getByRole('button', { name: /^Expand / }).click()
-	await expect(viewer).not.toHaveClass(/file-window-collapsed/)
-	await expect(line).toHaveCount(1)
-	await expect(line).toBeVisible()
+	// Expanding restores the window; the connector remains a single line and
+	// reattaches to the now-visible dot.
+	await source.getByRole('button', { name: /^Expand / }).click()
+	await expect(source).not.toHaveClass(/file-window-collapsed/)
+	await expect(lines).toHaveCount(1)
+	// The reattached connector should once again start from inside the expanded
+	// source window's code body, not its collapsed-header border.
+	const expandedRect = await lineRect()
+	const sourceBox = await source.boundingBox()
+	if (sourceBox === null) {
+		throw new Error('Expected the expanded window to have a bounding box')
+	}
+	const overlapsExpanded =
+		expandedRect.left <= sourceBox.x + sourceBox.width &&
+		expandedRect.right >= sourceBox.x &&
+		expandedRect.top <= sourceBox.y + sourceBox.height &&
+		expandedRect.bottom >= sourceBox.y
+	expect(overlapsExpanded).toBe(true)
 })
 
 test('a connector dragged onto nothing is not created', async ({ page }) => {
