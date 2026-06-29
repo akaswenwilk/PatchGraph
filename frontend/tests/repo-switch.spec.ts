@@ -117,6 +117,7 @@ test('file window titles stay readable when zoomed out and remain selectable', a
 	const viewer = page.getByRole('region', { name: 'File viewer for base.txt' })
 	const title = viewer.locator('.file-window-title')
 	const codeLine = page.locator('.code-row').first().locator('.line-content')
+	const codeScroll = viewer.locator('.file-code-scroll')
 	const workspace = page.locator('.workspace')
 
 	await expect(viewer).toBeVisible()
@@ -124,6 +125,7 @@ test('file window titles stay readable when zoomed out and remain selectable', a
 
 	const titleBefore = await title.boundingBox()
 	const codeBefore = await codeLine.boundingBox()
+	const codeViewportHeightBefore = await codeScroll.evaluate((element) => element.clientHeight)
 	if (titleBefore === null || codeBefore === null) {
 		throw new Error('Expected title and code bounding boxes before zoom')
 	}
@@ -146,12 +148,14 @@ test('file window titles stay readable when zoomed out and remain selectable', a
 
 	const titleAfter = await title.boundingBox()
 	const codeAfter = await codeLine.boundingBox()
+	const codeViewportHeightAfter = await codeScroll.evaluate((element) => element.clientHeight)
 	if (titleAfter === null || codeAfter === null) {
 		throw new Error('Expected title and code bounding boxes after zoom')
 	}
 
 	expect(titleAfter.height).toBeGreaterThan(titleBefore.height * 0.8)
 	expect(codeAfter.height).toBeLessThan(codeBefore.height * 0.8)
+	expect(codeViewportHeightAfter).toBeGreaterThanOrEqual(codeViewportHeightBefore - 2)
 
 	const selectableTitle = await title.boundingBox()
 	if (selectableTitle === null) {
