@@ -127,6 +127,10 @@ const MAX_ZOOM = 3
 // Per-wheel-notch sensitivity; multiplied into an exponential so zooming feels
 // uniform at every scale.
 const ZOOM_WHEEL_SENSITIVITY = 0.0015
+const TITLE_BASE_FONT_SIZE_REM = 1.15
+const TITLE_LINE_HEIGHT = 1.35
+const CSS_REM_IN_PX = 16
+const TITLE_BASE_LINE_HEIGHT = TITLE_BASE_FONT_SIZE_REM * CSS_REM_IN_PX * TITLE_LINE_HEIGHT
 // Fixed-size overview map pinned at the top-right. The whole logical canvas is
 // scaled to fit inside this box (aspect preserved), windows are drawn as little
 // rectangles, and the current viewport is outlined; clicking/dragging in it pans
@@ -136,6 +140,24 @@ const MINIMAP_MAX_HEIGHT = 160
 
 function clampZoom(value: number) {
 	return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
+}
+
+function readableTitleScale(zoom: number) {
+	return Math.max(1, 1 / zoom)
+}
+
+function titleHeaderExtraHeight(zoom: number) {
+	return TITLE_BASE_LINE_HEIGHT * (readableTitleScale(zoom) - 1)
+}
+
+function renderedWindowWidth(fileWindow: OpenFile, zoom: number) {
+	const width = fileWindow.width ?? DEFAULT_WINDOW_WIDTH
+	return width * readableTitleScale(zoom)
+}
+
+function renderedWindowHeight(fileWindow: OpenFile, zoom: number) {
+	const height = fileWindow.height ?? DEFAULT_WINDOW_HEIGHT
+	return fileWindow.collapsed ? height : height + titleHeaderExtraHeight(zoom)
 }
 
 function isProjectSummary(value: unknown): value is ProjectSummary {
@@ -622,8 +644,8 @@ function Minimap({
 							style={{
 								left: `${(fileWindow.x + offsetX) * scale}px`,
 								top: `${(fileWindow.y + offsetY) * scale}px`,
-								width: `${(fileWindow.width ?? DEFAULT_WINDOW_WIDTH) * scale}px`,
-								height: `${(fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) * scale}px`,
+								width: `${renderedWindowWidth(fileWindow, zoom) * scale}px`,
+								height: `${renderedWindowHeight(fileWindow, zoom) * scale}px`,
 							}}
 						>
 							<span className="minimap-window-label" title={fileWindow.filename}>
@@ -1628,16 +1650,24 @@ function App() {
 					// rect is the on-screen (zoomed) box; convert pointer deltas back to
 					// unscaled units so stored width/height stay in canvas space.
 					const scale = zoomRef.current
-					const currentWidth = fileWindow.width ?? rect.width / scale
-					const currentHeight = fileWindow.height ?? rect.height / scale
+					const titleScale = readableTitleScale(scale)
+					const headerExtraHeight = titleHeaderExtraHeight(scale)
+					const currentWidth = fileWindow.width ?? rect.width / scale / titleScale
+					const currentHeight = fileWindow.height ?? rect.height / scale - headerExtraHeight
 					const nextWidth =
 						direction === 'vertical'
 							? currentWidth
-							: Math.min(maxWidth, Math.max(minWidth, (event.clientX - rect.left) / scale))
+							: Math.min(
+									maxWidth,
+									Math.max(minWidth, (event.clientX - rect.left) / scale / titleScale),
+								)
 					const nextHeight =
 						direction === 'horizontal'
 							? currentHeight
-							: Math.min(maxHeight, Math.max(minHeight, (event.clientY - rect.top) / scale))
+							: Math.min(
+									maxHeight,
+									Math.max(minHeight, (event.clientY - rect.top) / scale - headerExtraHeight),
+								)
 
 					return {
 						...fileWindow,
@@ -1830,11 +1860,11 @@ function App() {
 	const minX = openFiles.reduce((min, fileWindow) => Math.min(min, fileWindow.x), 0)
 	const minY = openFiles.reduce((min, fileWindow) => Math.min(min, fileWindow.y), 0)
 	const maxX = openFiles.reduce(
-		(max, fileWindow) => Math.max(max, fileWindow.x + (fileWindow.width ?? DEFAULT_WINDOW_WIDTH)),
+		(max, fileWindow) => Math.max(max, fileWindow.x + renderedWindowWidth(fileWindow, zoom)),
 		0,
 	)
 	const maxY = openFiles.reduce(
-		(max, fileWindow) => Math.max(max, fileWindow.y + (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT)),
+		(max, fileWindow) => Math.max(max, fileWindow.y + renderedWindowHeight(fileWindow, zoom)),
 		0,
 	)
 	const offsetX = PAN_MARGIN - minX
@@ -2028,11 +2058,11 @@ function App() {
 								data-window-id={fileWindow.id}
 								aria-label={`File viewer for ${fileWindow.filename}`}
 								style={{
-									width: (fileWindow.width ?? DEFAULT_WINDOW_WIDTH) + 'px',
+									width: renderedWindowWidth(fileWindow, zoom) + 'px',
 									// Collapsed: height is driven by the header alone; the body is hidden.
 									height: fileWindow.collapsed
 										? 'auto'
-										: (fileWindow.height ?? DEFAULT_WINDOW_HEIGHT) + 'px',
+										: renderedWindowHeight(fileWindow, zoom) + 'px',
 									transform: `translate(${fileWindow.x + offsetX}px, ${fileWindow.y + offsetY}px)`,
 									zIndex: fileWindow.zIndex,
 								}}
