@@ -125,6 +125,10 @@ test('file window titles stay readable when zoomed out and remain selectable', a
 
 	const titleBefore = await title.boundingBox()
 	const codeBefore = await codeLine.boundingBox()
+	const windowStyleBefore = await viewer.evaluate((element) => ({
+		width: Number.parseFloat((element as HTMLElement).style.width),
+		height: Number.parseFloat((element as HTMLElement).style.height),
+	}))
 	const codeViewportHeightBefore = await codeScroll.evaluate((element) => element.clientHeight)
 	if (titleBefore === null || codeBefore === null) {
 		throw new Error('Expected title and code bounding boxes before zoom')
@@ -148,6 +152,10 @@ test('file window titles stay readable when zoomed out and remain selectable', a
 
 	const titleAfter = await title.boundingBox()
 	const codeAfter = await codeLine.boundingBox()
+	const windowStyleAfter = await viewer.evaluate((element) => ({
+		width: Number.parseFloat((element as HTMLElement).style.width),
+		height: Number.parseFloat((element as HTMLElement).style.height),
+	}))
 	const codeViewportHeightAfter = await codeScroll.evaluate((element) => element.clientHeight)
 	if (titleAfter === null || codeAfter === null) {
 		throw new Error('Expected title and code bounding boxes after zoom')
@@ -155,6 +163,8 @@ test('file window titles stay readable when zoomed out and remain selectable', a
 
 	expect(titleAfter.height).toBeGreaterThan(titleBefore.height * 0.8)
 	expect(codeAfter.height).toBeLessThan(codeBefore.height * 0.8)
+	expect(windowStyleAfter.width).toBeCloseTo(windowStyleBefore.width, 0)
+	expect(windowStyleAfter.height).toBeGreaterThan(windowStyleBefore.height)
 	expect(codeViewportHeightAfter).toBeGreaterThanOrEqual(codeViewportHeightBefore - 2)
 
 	const selectableTitle = await title.boundingBox()
