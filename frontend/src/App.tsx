@@ -2130,6 +2130,7 @@ function App() {
 												symbols={fileWindow.symbols}
 												focusLine={fileWindow.focusLine}
 												windowID={fileWindow.id}
+												zoom={zoom}
 												openBubble={openBubble}
 												onBubbleChange={setOpenBubble}
 												onOpenLocation={(path, line, source) =>

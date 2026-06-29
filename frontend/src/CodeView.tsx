@@ -46,6 +46,8 @@ type CodeViewProps = {
 	focusLine?: number | null
 	// Identifies this window so bubble ids are unique across multiple windows.
 	windowID: string
+	// Current canvas zoom, used to keep portaled popovers anchored while zooming.
+	zoom: number
 	// The single open bubble id across the whole app (or null), so opening one
 	// closes any other.
 	openBubble: string | null
@@ -95,6 +97,7 @@ export function CodeView({
 	symbols,
 	focusLine,
 	windowID,
+	zoom,
 	openBubble,
 	onBubbleChange,
 	onOpenLocation,
@@ -239,6 +242,7 @@ export function CodeView({
 									file={filename}
 									line={symbolLine}
 									windowID={windowID}
+									zoom={zoom}
 									openBubble={openBubble}
 									onBubbleChange={onBubbleChange}
 									onOpenLocation={onOpenLocation}
@@ -258,6 +262,7 @@ function CodeSegment({
 	file,
 	line,
 	windowID,
+	zoom,
 	openBubble,
 	onBubbleChange,
 	onOpenLocation,
@@ -267,6 +272,7 @@ function CodeSegment({
 	file: string
 	line: number
 	windowID: string
+	zoom: number
 	openBubble: string | null
 	onBubbleChange: (id: string | null) => void
 	onOpenLocation?: OpenLocationFromSymbol
@@ -340,6 +346,7 @@ function CodeSegment({
 							symbol={segment.symbol}
 							current={{ file, line, character: segment.markStart ?? -1 }}
 							anchorRef={tokenRef}
+							zoom={zoom}
 							onClose={() => onBubbleChange(null)}
 							onOpenLocation={onOpenLocation}
 						/>
@@ -414,12 +421,14 @@ function LspPopover({
 	symbol,
 	current,
 	anchorRef,
+	zoom,
 	onClose,
 	onOpenLocation,
 }: {
 	symbol: LspSymbol
 	current: CurrentOccurrence
 	anchorRef: React.RefObject<HTMLElement | null>
+	zoom: number
 	onClose: () => void
 	onOpenLocation?: OpenLocationFromSymbol
 }) {
@@ -484,7 +493,7 @@ function LspPopover({
 			window.removeEventListener('scroll', reposition, true)
 			window.removeEventListener('resize', reposition)
 		}
-	}, [anchorRef, symbol, references.length])
+	}, [anchorRef, symbol, references.length, zoom])
 
 	return createPortal(
 		// Stop clicks inside the popover from toggling the token open state.
