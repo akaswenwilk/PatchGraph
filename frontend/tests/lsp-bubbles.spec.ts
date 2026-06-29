@@ -136,7 +136,7 @@ test('clicking an LSP location opens that file at the line in a new window', asy
 	await expect(page.locator('.lsp-popover')).toHaveCount(0)
 })
 
-test('opening a definition loads the whole file, scrolled to the declaration', async ({ page }) => {
+test('opening a definition loads the full file with non-target context collapsed', async ({ page }) => {
 	await page.goto('/')
 
 	await openProject(page, /PatchGraph\s+PatchGraph$/)
@@ -161,12 +161,18 @@ test('opening a definition loads the whole file, scrolled to the declaration', a
 		.first()
 		.click()
 
-	// The new window loads the full file (same row count as the source), not a
-	// cropped slice, and highlights the declaration line it was opened at.
+	// The new window keeps the target visible immediately, but retains the rest of
+	// the file behind expandable collapsed rows instead of cropping it away.
 	await expect(viewers).toHaveCount(2, { timeout: LSP_TIMEOUT })
 	const opened = viewers.nth(1)
-	await expect(opened.locator('.code-row')).toHaveCount(sourceRows)
+	const collapsedRows = opened.locator('.code-row-collapsed')
+	await expect(collapsedRows.first()).toBeVisible()
 	await expect(opened.locator('.code-row-focused')).toHaveCount(1)
+
+	while ((await collapsedRows.count()) > 0) {
+		await collapsedRows.first().locator('.diff-expand-button').first().click()
+	}
+	await expect(opened.locator('.code-row')).toHaveCount(sourceRows)
 })
 
 test('opening a file from a location draws a connector that clears when the window closes', async ({

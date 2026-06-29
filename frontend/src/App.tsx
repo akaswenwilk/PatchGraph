@@ -4,7 +4,7 @@ import { CodeView, type DiffLineMeta } from './CodeView'
 import { FuzzyFileSearch, TextSearch } from './SearchPalette'
 import { GitMenu } from './GitMenu'
 import { SettingsMenu } from './SettingsMenu'
-import { hasLspInfo, parseLspAnalysis, type LspSymbol } from './lsp'
+import { hasLspInfo, parseLspAnalysis, type LspRange, type LspSymbol } from './lsp'
 import { ConnectionsOverlay } from './Connections'
 import {
 	findSnapAnchor,
@@ -52,6 +52,10 @@ type OpenFile = {
 	// Zero-based line to scroll to and highlight when the window opens (set when
 	// the window was opened by clicking an LSP location).
 	focusLine: number | null
+	// LSP-opened windows show the target region with surrounding file content
+	// collapsed, but expansion keeps the complete file available in-window.
+	collapseAroundFocus: boolean
+	focusRange: LspRange | null
 	// When true the window shows only its header; the code body is hidden but kept
 	// mounted so its scroll position and rendered size are restored on expand.
 	collapsed: boolean
@@ -1174,6 +1178,8 @@ function App() {
 			lspState: 'loading' as LspState,
 			symbols: [],
 			focusLine: null,
+			collapseAroundFocus: false,
+			focusRange: null,
 			collapsed: false,
 			width,
 			height,
@@ -1274,9 +1280,14 @@ function App() {
 									...revealedMeta,
 								]
 							: revealedMeta
+				const nextFocusLine =
+					fileWindow.focusLine !== null && lineIndex < fileWindow.focusLine
+						? fileWindow.focusLine + replacementLines.length - 1
+						: fileWindow.focusLine
 
 				return {
 					...fileWindow,
+					focusLine: nextFocusLine,
 					lines: [
 						...fileWindow.lines.slice(0, lineIndex),
 						...replacementLines,
@@ -1291,6 +1302,65 @@ function App() {
 				}
 			}),
 		)
+	}
+
+	function collapseFileAroundRange(
+		lines: string[],
+		line: number,
+		range: LspRange | null,
+	): { lines: string[]; diffLines: DiffLineMeta[]; focusLine: number } {
+		if (lines.length === 0) {
+			return { lines, diffLines: [], focusLine: 0 }
+		}
+
+		const contextLines = 3
+		const targetStart = Math.max(0, Math.min(range?.start.line ?? line, lines.length - 1))
+		const targetEnd = Math.max(
+			targetStart,
+			Math.min(range?.end.line ?? line, lines.length - 1),
+		)
+		const visibleStart = Math.max(0, targetStart - contextLines)
+		const visibleEnd = Math.min(lines.length - 1, targetEnd + contextLines)
+		const visibleLines: string[] = []
+		const diffLines: DiffLineMeta[] = []
+		let focusLine = 0
+
+		const appendHiddenBlock = (start: number, end: number) => {
+			if (start > end) {
+				return
+			}
+			const hidden = lines.slice(start, end + 1).map((text, index) => ({
+				text,
+				kind: 'context' as const,
+				newLine: start + index + 1,
+			}))
+			visibleLines.push(
+				`${hidden.length} collapsed ${hidden.length === 1 ? 'line' : 'lines'}`,
+			)
+			diffLines.push({
+				kind: 'collapsed',
+				hidden,
+			})
+		}
+
+		const appendVisibleLine = (index: number) => {
+			if (index === line) {
+				focusLine = visibleLines.length
+			}
+			visibleLines.push(lines[index] ?? '')
+			diffLines.push({
+				kind: 'context',
+				newLine: index + 1,
+			})
+		}
+
+		appendHiddenBlock(0, visibleStart - 1)
+		for (let index = visibleStart; index <= visibleEnd; index += 1) {
+			appendVisibleLine(index)
+		}
+		appendHiddenBlock(visibleEnd + 1, lines.length - 1)
+
+		return { lines: visibleLines, diffLines, focusLine }
 	}
 
 	async function loadFileContents(projectID: string, filename: string, windowID: string) {
@@ -1312,11 +1382,29 @@ function App() {
 			}
 
 			setOpenFiles((current) =>
-				current.map((fileWindow) =>
-					fileWindow.id === windowID
-						? { ...fileWindow, state: 'ready', error: '', lines: data }
-						: fileWindow,
-				),
+				current.map((fileWindow) => {
+					if (fileWindow.id !== windowID) {
+						return fileWindow
+					}
+					if (!fileWindow.collapseAroundFocus || fileWindow.focusLine === null) {
+						return { ...fileWindow, state: 'ready', error: '', lines: data }
+					}
+
+					const collapsed = collapseFileAroundRange(
+						data,
+						fileWindow.focusLine,
+						fileWindow.focusRange,
+					)
+					return {
+						...fileWindow,
+						state: 'ready',
+						error: '',
+						lines: collapsed.lines,
+						diffLines: collapsed.diffLines,
+						focusLine: collapsed.focusLine,
+						height: Math.min(4000, Math.max(220, 104 + collapsed.lines.length * 24)),
+					}
+				}),
 			)
 		} catch (error) {
 			setOpenFiles((current) =>
@@ -1408,6 +1496,7 @@ function App() {
 		originWindowID: string,
 		path: string,
 		line: number,
+		range?: LspRange,
 		source?: { line: number; character: number },
 	) {
 		if (activeProject === null) {
@@ -1439,11 +1528,13 @@ function App() {
 			}
 		}
 
-		// The whole file loads into the new window, scrolled to and highlighting the
-		// target line.
+		// The whole file loads into the new window, with non-target regions collapsed
+		// so the location stays visible without cropping the file out of the window.
 		const pendingWindow = {
 			...createWindow(path, origin),
 			focusLine: line,
+			collapseAroundFocus: true,
+			focusRange: range ?? null,
 		}
 		setOpenFiles((current) => [...current, pendingWindow])
 		setActiveWindowID(pendingWindow.id)
@@ -2130,13 +2221,13 @@ function App() {
 												symbols={fileWindow.symbols}
 												focusLine={fileWindow.focusLine}
 												windowID={fileWindow.id}
-												zoom={zoom}
-												openBubble={openBubble}
-												onBubbleChange={setOpenBubble}
-												onOpenLocation={(path, line, source) =>
-													openLocationInNewWindow(fileWindow.id, path, line, source)
-												}
-												onStartConnection={startConnectionDraw}
+											zoom={zoom}
+											openBubble={openBubble}
+											onBubbleChange={setOpenBubble}
+											onOpenLocation={(path, line, range, source) =>
+												openLocationInNewWindow(fileWindow.id, path, line, range, source)
+											}
+											onStartConnection={startConnectionDraw}
 												onExpandCollapsedDiff={(lineIndex, direction) =>
 													expandCollapsedDiff(fileWindow.id, lineIndex, direction)
 												}

@@ -12,6 +12,7 @@ import {
 	splitTokensWithMarks,
 	type LineSegment,
 	type LspLocation,
+	type LspRange,
 	type LspSymbol,
 } from './lsp'
 import type { DotAnchor } from './connectionGeometry'
@@ -19,17 +20,16 @@ import type { DotAnchor } from './connectionGeometry'
 // Begin dragging a new connector from a bubble dot.
 type StartConnection = (source: DotAnchor, clientX: number, clientY: number) => void
 
-// The inclusive line span (zero-based) a window should show, instead of the
-// whole file — used to open a definition as just its own lines.
 // Handler used by location items: open the file at a line. The whole file is
 // always loaded into the new window; the line is scrolled to and highlighted.
-type OpenLocation = (path: string, line: number) => void
+type OpenLocation = (path: string, line: number, range?: LspRange) => void
 
 // Handler at the CodeView boundary: also carries the source occurrence (the
 // bubble the location was opened from) so a connector can be drawn from it.
 type OpenLocationFromSymbol = (
 	path: string,
 	line: number,
+	range: LspRange | undefined,
 	source: { line: number; character: number },
 ) => void
 
@@ -440,9 +440,9 @@ function LspPopover({
 	// Opening a location closes this popover and passes the source occurrence
 	// (this bubble) so a connector line can be drawn from it to the new window.
 	const openLocation: OpenLocation | undefined = onOpenLocation
-		? (path, line) => {
+		? (path, line, range) => {
 				onClose()
-				onOpenLocation(path, line, { line: current.line, character: current.character })
+				onOpenLocation(path, line, range, { line: current.line, character: current.character })
 			}
 		: undefined
 
@@ -609,7 +609,7 @@ function LspLocationItem({
 		<button
 			type="button"
 			className="lsp-popover-location lsp-popover-location-link"
-			onClick={() => onOpenLocation(location.path, line)}
+			onClick={() => onOpenLocation(location.path, line, location.defRange)}
 		>
 			{label}
 		</button>
