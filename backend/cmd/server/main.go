@@ -44,6 +44,7 @@ func start(args []string) error {
 	flags := flag.NewFlagSet("start", flag.ExitOnError)
 	port := flags.String("port", envWithDefault("PORT", "8080"), "HTTP port to listen on")
 	projectsRoot := flags.String("projects", defaultProjectsRoot(), "directory containing local git projects")
+	configPath := flags.String("config", envWithDefault(lsp.ConfigEnvVar, ""), "YAML config file for language servers")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -54,9 +55,17 @@ func start(args []string) error {
 		}
 	}
 
+	lspConfig, err := lsp.LoadConfig(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	analyzeFile := func(projectID string, filename string) (lsp.FileAnalysis, error) {
+		return lspHandlerWithConfig(lspConfig, projectID, filename)
+	}
+
 	server := &http.Server{
 		Addr:    ":" + *port,
-		Handler: newMux(projectsHandler, projectHandler, fileHandler, searchHandler, lspHandler, branchesHandler, branchActionHandler, branchCompareHandler),
+		Handler: newMux(projectsHandler, projectHandler, fileHandler, searchHandler, analyzeFile, branchesHandler, branchActionHandler, branchCompareHandler),
 	}
 
 	log.Printf("PatchGraph backend listening on %s", server.Addr)
@@ -69,12 +78,13 @@ func start(args []string) error {
 
 func usage() {
 	_, _ = fmt.Fprintf(os.Stderr, `Usage:
-  patchgraph start [--port 8080] [--projects ~/projects]
+  patchgraph start [--port 8080] [--projects ~/projects] [--config ~/.config/patchgraph/config.yaml]
 
 Environment:
   PORT                       default port when --port is omitted
   %s      default projects root when --projects is omitted
-`, projects.RootEnvVar)
+  %s        default YAML config path when --config is omitted
+`, projects.RootEnvVar, lsp.ConfigEnvVar)
 }
 
 func envWithDefault(name string, fallback string) string {
@@ -167,12 +177,16 @@ func branchCompareHandler(projectID string, base string, compare string) (projec
 const lspDefaultTimeout = 90 * time.Second
 
 func lspHandler(projectID string, filename string) (lsp.FileAnalysis, error) {
+	return lspHandlerWithConfig(lsp.DefaultConfig(), projectID, filename)
+}
+
+func lspHandlerWithConfig(config lsp.Config, projectID string, filename string) (lsp.FileAnalysis, error) {
 	root, err := projects.RootFromEnv()
 	if err != nil {
 		return lsp.FileAnalysis{}, err
 	}
 
-	command, languageID, ok := lsp.LanguageForFile(filename)
+	command, languageID, serverConfig, ok := lsp.LanguageForFileWithConfig(filename, config)
 	if !ok {
 		return lsp.FileAnalysis{}, lsp.ErrUnsupportedLanguage
 	}
@@ -185,7 +199,7 @@ func lspHandler(projectID string, filename string) (lsp.FileAnalysis, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), lspDefaultTimeout)
 	defer cancel()
 
-	return lsp.Analyze(ctx, project.AbsolutePath(), absPath, languageID, command)
+	return lsp.AnalyzeWithConfig(ctx, project.AbsolutePath(), absPath, languageID, command, serverConfig)
 }
 
 func newMux(

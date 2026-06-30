@@ -38,7 +38,40 @@ The app serves the frontend and backend API from the same port. It listens on
 patchgraph start --port 9090 --projects ~/projects
 ```
 
-`PORT` and `PATCHGRAPH_PROJECTS_ROOT` are also supported.
+`PORT`, `PATCHGRAPH_PROJECTS_ROOT`, and `PATCHGRAPH_CONFIG` are also supported.
+When `--config` and `PATCHGRAPH_CONFIG` are omitted, PatchGraph uses
+`~/.config/patchgraph/config.yaml` if it exists.
+
+## Language Server Config
+
+PatchGraph accepts YAML configuration for language-server commands,
+initialization options, and workspace settings:
+
+```bash
+patchgraph start --config ~/.config/patchgraph/config.yaml
+```
+
+For example, to pass Go build tags to `gopls`:
+
+```yaml
+languageServers:
+  go:
+    settings:
+      gopls:
+        buildFlags:
+          - -tags=integration,e2e
+```
+
+You can also override the server command:
+
+```yaml
+languageServers:
+  go:
+    command:
+      - gopls
+      - serve
+      - -rpc.trace
+```
 
 For backend-only development:
 
