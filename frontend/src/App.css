@@ -524,6 +524,11 @@
 	tab-size: 2;
 }
 
+.file-code-wrap {
+	width: 100%;
+	max-width: 100%;
+}
+
 .code-row {
 	display: grid;
 	grid-template-columns: 72px minmax(0, 1fr);
@@ -533,6 +538,11 @@
 .line-number,
 .line-content {
 	white-space: pre;
+}
+
+.file-code-wrap .line-content {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 /* The line a window was opened at (via an LSP location click): a steady tint
@@ -1250,6 +1260,9 @@
 
 /* Settings menu */
 .settings-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
 	padding: 8px 4px 4px;
 }
 

@@ -1,16 +1,17 @@
 import { SearchOverlay } from './SearchPalette'
 
-// Workspace settings, shown in a modal window like the git branch menu. Today it
-// holds a single toggle controlling how the LSP info list opens locations: either
-// always cascading a new window, or jumping to (and connecting) an already-open
-// window for that file.
+// Workspace settings, shown in a modal window like the git branch menu.
 export function SettingsMenu({
 	lspOpensNewWindow,
 	onLspOpensNewWindowChange,
+	textWrap,
+	onTextWrapChange,
 	onClose,
 }: {
 	lspOpensNewWindow: boolean
 	onLspOpensNewWindowChange: (value: boolean) => void
+	textWrap: boolean
+	onTextWrapChange: (value: boolean) => void
 	onClose: () => void
 }) {
 	// The toggle reads as "jump to existing window", which is the inverse of the
@@ -48,6 +49,31 @@ export function SettingsMenu({
 						</span>
 						<span className="settings-toggle-label">
 							{jumpToExisting ? 'Jump to existing window' : 'Always open a new window'}
+						</span>
+					</button>
+				</div>
+
+				<div className="settings-row">
+					<div className="settings-row-text">
+						<p className="settings-row-title">Text wrap</p>
+						<p className="settings-row-description">
+							Wrap long code lines inside each window instead of using horizontal
+							scrolling.
+						</p>
+					</div>
+
+					<button
+						type="button"
+						role="switch"
+						aria-checked={textWrap}
+						className={textWrap ? 'settings-toggle settings-toggle-on' : 'settings-toggle'}
+						onClick={() => onTextWrapChange(!textWrap)}
+					>
+						<span className="settings-toggle-track" aria-hidden="true">
+							<span className="settings-toggle-thumb" />
+						</span>
+						<span className="settings-toggle-label">
+							{textWrap ? 'Wrap text' : 'Do not wrap text'}
 						</span>
 					</button>
 				</div>
