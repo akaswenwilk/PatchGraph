@@ -291,6 +291,48 @@ func TestCompareBranchesCollapsesHunksAndMarksChangedText(t *testing.T) {
 	}
 }
 
+func TestCompareBranchesCollapsesUnchangedBoundaries(t *testing.T) {
+	root, id := setupBranchRepo(t)
+	repoPath := filepath.Join(root, "PatchGraph")
+	contents := "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n"
+	writeFile(t, filepath.Join(repoPath, "main.go"), contents)
+	runGit(t, repoPath, "add", "main.go")
+	runGit(t, repoPath, "commit", "-qm", "add main")
+
+	runGit(t, repoPath, "switch", "-c", "feature")
+	changed := "one\ntwo\nthree\nfour\nfive\nsix\nseven\nEIGHT\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n"
+	writeFile(t, filepath.Join(repoPath, "main.go"), changed)
+	runGit(t, repoPath, "commit", "-aqm", "edit middle line")
+
+	comparison, err := CompareBranches(root, id, "main", "feature")
+	if err != nil {
+		t.Fatalf("CompareBranches() error = %v", err)
+	}
+
+	var mainDiff *FileDiff
+	for index := range comparison.Files {
+		if comparison.Files[index].Filename == "main.go" {
+			mainDiff = &comparison.Files[index]
+			break
+		}
+	}
+	if mainDiff == nil {
+		t.Fatalf("main.go diff not found: %#v", comparison.Files)
+	}
+	if len(mainDiff.Lines) < 3 {
+		t.Fatalf("main.go lines = %#v, want boundary collapsed rows around hunk", mainDiff.Lines)
+	}
+
+	leading := mainDiff.Lines[0]
+	if leading.Kind != "collapsed" || len(leading.Hidden) != 4 || leading.Hidden[0].NewLine != 1 || leading.Hidden[3].NewLine != 4 {
+		t.Fatalf("leading collapsed line = %#v, want hidden new lines 1-4", leading)
+	}
+	trailing := mainDiff.Lines[len(mainDiff.Lines)-1]
+	if trailing.Kind != "collapsed" || len(trailing.Hidden) != 3 || trailing.Hidden[0].NewLine != 12 || trailing.Hidden[2].NewLine != 14 {
+		t.Fatalf("trailing collapsed line = %#v, want hidden new lines 12-14", trailing)
+	}
+}
+
 func TestPerformBranchActionRejectsUnknownAction(t *testing.T) {
 	root, id := setupBranchRepo(t)
 
