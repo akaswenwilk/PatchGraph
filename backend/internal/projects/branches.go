@@ -243,23 +243,39 @@ func collapseDiffHunks(project Project, base, compare string, hunks []FileDiff) 
 			contentPath = first.OldPath
 		}
 		content := readGitFileLines(project, contentRef, contentPath)
+		appendCollapsedLines := func(hidden []DiffLine) {
+			if len(hidden) == 0 {
+				return
+			}
+			collapsed.Lines = append(collapsed.Lines, DiffLine{
+				Kind:   "collapsed",
+				Text:   fmt.Sprintf("%d unchanged %s", len(hidden), pluralize("line", len(hidden))),
+				Hidden: hidden,
+			})
+		}
 
 		for hunkIndex, hunk := range fileHunks {
+			if hunkIndex == 0 {
+				firstStart, _ := hunkVisibleRange(hunk, useOldSide)
+				if firstStart > 1 {
+					appendCollapsedLines(contextLinesFromContent(content, 1, firstStart-1, useOldSide))
+				}
+			}
 			if hunkIndex > 0 {
 				_, previousEnd := hunkVisibleRange(fileHunks[hunkIndex-1], useOldSide)
 				nextStart, _ := hunkVisibleRange(hunk, useOldSide)
 				if previousEnd > 0 && nextStart > 0 {
 					hidden := contextLinesFromContent(content, previousEnd+1, nextStart-1, useOldSide)
-					if len(hidden) > 0 {
-						collapsed.Lines = append(collapsed.Lines, DiffLine{
-							Kind:   "collapsed",
-							Text:   fmt.Sprintf("%d unchanged %s", len(hidden), pluralize("line", len(hidden))),
-							Hidden: hidden,
-						})
-					}
+					appendCollapsedLines(hidden)
 				}
 			}
 			collapsed.Lines = append(collapsed.Lines, hunk.Lines...)
+			if hunkIndex == len(fileHunks)-1 {
+				_, lastEnd := hunkVisibleRange(hunk, useOldSide)
+				if lastEnd > 0 {
+					appendCollapsedLines(contextLinesFromContent(content, lastEnd+1, len(content), useOldSide))
+				}
+			}
 		}
 
 		files = append(files, collapsed)
