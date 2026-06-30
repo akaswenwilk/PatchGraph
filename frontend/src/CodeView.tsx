@@ -55,6 +55,7 @@ type CodeViewProps = {
 	onOpenLocation?: OpenLocationFromSymbol
 	onStartConnection?: StartConnection
 	onExpandCollapsedDiff?: (lineIndex: number, direction: 'up' | 'down') => void
+	textWrap?: boolean
 }
 
 export type DiffLineMeta = {
@@ -103,6 +104,7 @@ export function CodeView({
 	onOpenLocation,
 	onStartConnection,
 	onExpandCollapsedDiff,
+	textWrap = false,
 }: CodeViewProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null)
 	const focusedRowRef = useRef<HTMLDivElement | null>(null)
@@ -168,7 +170,7 @@ export function CodeView({
 	}, [lines, symbols, filename, diffLines])
 
 	return (
-		<div className="file-code" role="presentation">
+		<div className={textWrap ? 'file-code file-code-wrap' : 'file-code'} role="presentation">
 			{lines.map((line, index) => {
 				const tokens = highlighted?.[index]
 				const baseTokens: HighlightedToken[] =

@@ -112,6 +112,7 @@ type TreeNode = {
 
 const DEFAULT_WINDOW_WIDTH = 900
 const DEFAULT_WINDOW_HEIGHT = 640
+const COLLAPSED_WINDOW_BASE_HEIGHT = 96
 const WINDOW_OFFSET_X = 28
 const WINDOW_OFFSET_Y = 24
 const WINDOW_MARGIN = 24
@@ -158,7 +159,9 @@ function renderedWindowWidth(fileWindow: OpenFile) {
 
 function renderedWindowHeight(fileWindow: OpenFile, zoom: number) {
 	const height = fileWindow.height ?? DEFAULT_WINDOW_HEIGHT
-	return fileWindow.collapsed ? height : height + titleScaleHeightExtra(zoom)
+	return fileWindow.collapsed
+		? COLLAPSED_WINDOW_BASE_HEIGHT + titleScaleHeightExtra(zoom)
+		: height + titleScaleHeightExtra(zoom)
 }
 
 function isProjectSummary(value: unknown): value is ProjectSummary {
@@ -698,6 +701,9 @@ function App() {
 	const [lspOpensNewWindow, setLspOpensNewWindow] = useState<boolean>(
 		() => localStorage.getItem('patchgraph.lspOpensNewWindow') === 'true',
 	)
+	const [textWrap, setTextWrap] = useState<boolean>(
+		() => localStorage.getItem('patchgraph.textWrap') === 'true',
+	)
 	const [projects, setProjects] = useState<ProjectSummary[]>([])
 	const [query, setQuery] = useState('')
 	const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null)
@@ -794,6 +800,10 @@ function App() {
 	useEffect(() => {
 		localStorage.setItem('patchgraph.lspOpensNewWindow', String(lspOpensNewWindow))
 	}, [lspOpensNewWindow])
+
+	useEffect(() => {
+		localStorage.setItem('patchgraph.textWrap', String(textWrap))
+	}, [textWrap])
 
 	// Global search shortcuts, available once a repo is open: Ctrl/Cmd+P opens the
 	// fuzzy file finder, Ctrl/Cmd+Shift+F opens the global text search. Both are
@@ -2159,10 +2169,7 @@ function App() {
 								aria-label={`File viewer for ${fileWindow.filename}`}
 								style={{
 									width: renderedWindowWidth(fileWindow) + 'px',
-									// Collapsed: height is driven by the header alone; the body is hidden.
-									height: fileWindow.collapsed
-										? 'auto'
-										: renderedWindowHeight(fileWindow, zoom) + 'px',
+									height: renderedWindowHeight(fileWindow, zoom) + 'px',
 									transform: `translate(${fileWindow.x + offsetX}px, ${fileWindow.y + offsetY}px)`,
 									zIndex: fileWindow.zIndex,
 								}}
@@ -2232,27 +2239,28 @@ function App() {
 											className={
 												fileWindow.collapsed
 													? 'file-code-scroll file-code-scroll-collapsed'
-													: 'file-code-scroll'
-											}
-										>
-											<CodeView
-												filename={fileWindow.filename}
-												lines={fileWindow.lines}
-												diffLines={fileWindow.diffLines}
-												symbols={fileWindow.symbols}
-												focusLine={fileWindow.focusLine}
-												windowID={fileWindow.id}
+												: 'file-code-scroll'
+										}
+									>
+										<CodeView
+											filename={fileWindow.filename}
+											lines={fileWindow.lines}
+											diffLines={fileWindow.diffLines}
+											symbols={fileWindow.symbols}
+											focusLine={fileWindow.focusLine}
+											windowID={fileWindow.id}
 											zoom={zoom}
 											openBubble={openBubble}
 											onBubbleChange={setOpenBubble}
+											textWrap={textWrap}
 											onOpenLocation={(path, line, range, source) =>
 												openLocationInNewWindow(fileWindow.id, path, line, range, source)
 											}
 											onStartConnection={startConnectionDraw}
-												onExpandCollapsedDiff={(lineIndex, direction) =>
-													expandCollapsedDiff(fileWindow.id, lineIndex, direction)
-												}
-											/>
+											onExpandCollapsedDiff={(lineIndex, direction) =>
+												expandCollapsedDiff(fileWindow.id, lineIndex, direction)
+											}
+										/>
 										</div>
 									</>
 								)}
@@ -2446,6 +2454,8 @@ function App() {
 				<SettingsMenu
 					lspOpensNewWindow={lspOpensNewWindow}
 					onLspOpensNewWindowChange={setLspOpensNewWindow}
+					textWrap={textWrap}
+					onTextWrapChange={setTextWrap}
 					onClose={() => setSearchMode(null)}
 				/>
 			) : null}
