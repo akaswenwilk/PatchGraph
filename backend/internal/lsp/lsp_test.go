@@ -53,6 +53,60 @@ func TestLanguageForFile(t *testing.T) {
 	}
 }
 
+func TestLanguageForFileWithConfigOverridesCommand(t *testing.T) {
+	config := DefaultConfig()
+	config.LanguageServers["go"] = ServerConfig{
+		Command: []string{"custom-gopls", "serve", "-rpc.trace"},
+	}
+
+	command, languageID, _, ok := LanguageForFileWithConfig("main.go", config)
+	if !ok {
+		t.Fatal("LanguageForFileWithConfig() ok = false, want true")
+	}
+	if !reflect.DeepEqual(command, []string{"custom-gopls", "serve", "-rpc.trace"}) {
+		t.Fatalf("command = %#v", command)
+	}
+	if languageID != "go" {
+		t.Fatalf("languageID = %q, want go", languageID)
+	}
+	if command[0] == "gopls" {
+		t.Fatal("command aliases the default command instead of using override")
+	}
+}
+
+func TestLoadConfigMergesGoplsSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "patchgraph.yaml")
+	writeTestFile(t, path, "languageServers:\n  go:\n    command:\n      - custom-gopls\n      - serve\n    initializationOptions:\n      directoryFilters:\n        - -node_modules\n    settings:\n      gopls:\n        buildFlags:\n          - -tags=integration,e2e\n")
+
+	config, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	command, languageID, serverConfig, ok := LanguageForFileWithConfig("main.go", config)
+	if !ok {
+		t.Fatal("LanguageForFileWithConfig() ok = false, want true")
+	}
+	if !reflect.DeepEqual(command, []string{"custom-gopls", "serve"}) {
+		t.Fatalf("command = %#v", command)
+	}
+	if languageID != "go" {
+		t.Fatalf("languageID = %q, want go", languageID)
+	}
+	if got := serverConfig.InitializationOptions["semanticTokens"]; got != true {
+		t.Fatalf("semanticTokens = %#v, want true default preserved", got)
+	}
+	if got := serverConfig.InitializationOptions["directoryFilters"]; !reflect.DeepEqual(got, []any{"-node_modules"}) {
+		t.Fatalf("directoryFilters = %#v", got)
+	}
+	goplsSettings, ok := serverConfig.configurationForSection("gopls").(map[string]any)
+	if !ok {
+		t.Fatalf("gopls settings = %#v", serverConfig.configurationForSection("gopls"))
+	}
+	if got := goplsSettings["buildFlags"]; !reflect.DeepEqual(got, []any{"-tags=integration,e2e"}) {
+		t.Fatalf("buildFlags = %#v", got)
+	}
+}
+
 func TestPathURIRoundTrip(t *testing.T) {
 	cases := []string{
 		"/home/akw/projects/PatchGraph/main.go",

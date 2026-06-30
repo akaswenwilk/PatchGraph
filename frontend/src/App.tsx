@@ -132,6 +132,7 @@ const MAX_ZOOM = 3
 // uniform at every scale.
 const ZOOM_WHEEL_SENSITIVITY = 0.0015
 const TITLE_BASE_FONT_SIZE_REM = 1.15
+const TITLE_SCALE_HEIGHT_COMPENSATION = 72
 // Fixed-size overview map pinned at the top-right. The whole logical canvas is
 // scaled to fit inside this box (aspect preserved), windows are drawn as little
 // rectangles, and the current viewport is outlined; clicking/dragging in it pans
@@ -147,13 +148,17 @@ function readableTitleScale(zoom: number) {
 	return Math.max(1, 1 / zoom)
 }
 
+function titleScaleHeightExtra(zoom: number) {
+	return (readableTitleScale(zoom) - 1) * TITLE_SCALE_HEIGHT_COMPENSATION
+}
+
 function renderedWindowWidth(fileWindow: OpenFile) {
 	return fileWindow.width ?? DEFAULT_WINDOW_WIDTH
 }
 
 function renderedWindowHeight(fileWindow: OpenFile, zoom: number) {
 	const height = fileWindow.height ?? DEFAULT_WINDOW_HEIGHT
-	return fileWindow.collapsed ? height : height * readableTitleScale(zoom)
+	return fileWindow.collapsed ? height : height + titleScaleHeightExtra(zoom)
 }
 
 function isProjectSummary(value: unknown): value is ProjectSummary {
@@ -1733,9 +1738,9 @@ function App() {
 					// rect is the on-screen (zoomed) box; convert pointer deltas back to
 					// unscaled units so stored width/height stay in canvas space.
 					const scale = zoomRef.current
-					const titleScale = readableTitleScale(scale)
+					const titleExtra = titleScaleHeightExtra(scale)
 					const currentWidth = fileWindow.width ?? rect.width / scale
-					const currentHeight = fileWindow.height ?? rect.height / scale / titleScale
+					const currentHeight = fileWindow.height ?? rect.height / scale - titleExtra
 					const nextWidth =
 						direction === 'vertical'
 							? currentWidth
@@ -1745,7 +1750,7 @@ function App() {
 							? currentHeight
 							: Math.min(
 									maxHeight,
-									Math.max(minHeight, (event.clientY - rect.top) / scale / titleScale),
+									Math.max(minHeight, (event.clientY - rect.top) / scale - titleExtra),
 								)
 
 					return {

@@ -96,26 +96,45 @@ var rubyFilenames = map[string]struct{}{
 // LanguageForFile maps a filename to the language server command and the LSP
 // languageId to advertise. ok is false when the extension is unsupported.
 func LanguageForFile(name string) (command []string, languageID string, ok bool) {
+	command, languageID, _, ok = LanguageForFileWithConfig(name, DefaultConfig())
+	return command, languageID, ok
+}
+
+// LanguageForFileWithConfig maps a filename to the configured language-server
+// command, the LSP languageId, and the server settings for that language.
+func LanguageForFileWithConfig(name string, config Config) (command []string, languageID string, serverConfig ServerConfig, ok bool) {
+	languageKey, defaultCommand, languageID, ok := languageForFile(name)
+	if !ok {
+		return nil, "", ServerConfig{}, false
+	}
+	serverConfig = config.serverForLanguage(languageKey)
+	if len(serverConfig.Command) == 0 {
+		serverConfig.Command = defaultCommand
+	}
+	return append([]string(nil), serverConfig.Command...), languageID, serverConfig, true
+}
+
+func languageForFile(name string) (languageKey string, command []string, languageID string, ok bool) {
 	base := strings.ToLower(filepath.Base(name))
 	if _, ruby := rubyFilenames[base]; ruby {
-		return []string{"ruby-lsp"}, "ruby", true
+		return "ruby", []string{"ruby-lsp"}, "ruby", true
 	}
 
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".go":
-		return []string{"gopls", "serve"}, "go", true
+		return "go", []string{"gopls", "serve"}, "go", true
 	case ".rb", ".rake", ".gemspec", ".ru":
-		return []string{"ruby-lsp"}, "ruby", true
+		return "ruby", []string{"ruby-lsp"}, "ruby", true
 	case ".ts", ".mts", ".cts":
-		return tsServer, "typescript", true
+		return "typescript", tsServer, "typescript", true
 	case ".tsx":
-		return tsServer, "typescriptreact", true
+		return "typescript", tsServer, "typescriptreact", true
 	case ".js", ".mjs", ".cjs":
-		return tsServer, "javascript", true
+		return "javascript", tsServer, "javascript", true
 	case ".jsx":
-		return tsServer, "javascriptreact", true
+		return "javascript", tsServer, "javascriptreact", true
 	default:
-		return nil, "", false
+		return "", nil, "", false
 	}
 }
 
@@ -133,13 +152,22 @@ const maxAnalyzedTokens = 5000
 // languageID the LSP language identifier, and command the server invocation
 // (typically from LanguageForFile).
 func Analyze(ctx context.Context, root, absFile, languageID string, command []string) (FileAnalysis, error) {
+	return AnalyzeWithConfig(ctx, root, absFile, languageID, command, ServerConfig{})
+}
+
+func AnalyzeWithConfig(
+	ctx context.Context,
+	root, absFile, languageID string,
+	command []string,
+	serverConfig ServerConfig,
+) (FileAnalysis, error) {
 	content, err := os.ReadFile(absFile)
 	if err != nil {
 		return FileAnalysis{}, err
 	}
 	lines := splitLines(string(content))
 
-	c, err := startClient(ctx, command, root)
+	c, err := startClient(ctx, command, root, serverConfig)
 	if err != nil {
 		return FileAnalysis{}, err
 	}
@@ -295,6 +323,7 @@ type client struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
+	config ServerConfig
 
 	writeMu sync.Mutex
 
@@ -351,7 +380,7 @@ type rpcResponse struct {
 	err    error
 }
 
-func startClient(ctx context.Context, command []string, root string) (*client, error) {
+func startClient(ctx context.Context, command []string, root string, serverConfig ServerConfig) (*client, error) {
 	if len(command) == 0 {
 		return nil, ErrServerUnavailable
 	}
@@ -379,6 +408,7 @@ func startClient(ctx context.Context, command []string, root string) (*client, e
 		cmd:          cmd,
 		stdin:        stdin,
 		stdout:       bufio.NewReader(stdout),
+		config:       serverConfig.clone(),
 		pending:      make(map[int]chan rpcResponse),
 		openedDocs:   make(map[string]bool),
 		symbolRanges: make(map[string][]rangedSymbol),
@@ -443,10 +473,23 @@ func (c *client) handleServerRequest(msg rpcMessage) {
 			Items []json.RawMessage `json:"items"`
 		}
 		_ = json.Unmarshal(msg.Params, &params)
-		result = make([]any, len(params.Items))
+		items := make([]any, len(params.Items))
+		for index, item := range params.Items {
+			items[index] = c.config.configurationForSection(configurationSection(item))
+		}
+		result = items
 	}
 
 	_ = c.write(rpcResult{JSONRPC: "2.0", ID: *msg.ID, Result: result})
+}
+
+func configurationSection(raw json.RawMessage) string {
+	var item map[string]any
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return ""
+	}
+	section, _ := item["section"].(string)
+	return section
 }
 
 func (c *client) failPending(err error) {
@@ -535,11 +578,14 @@ var standardTokenTypes = []string{
 // initialize performs the LSP handshake and returns the server's semantic-token
 // legend (token type names by index), which is empty if unsupported.
 func (c *client) initialize(ctx context.Context, root string) ([]string, error) {
+	initializationOptions := c.config.InitializationOptions
+	if initializationOptions == nil {
+		initializationOptions = map[string]any{}
+	}
 	params := map[string]any{
-		"processId": os.Getpid(),
-		"rootUri":   pathToURI(root),
-		// gopls disables semantic tokens unless enabled via this setting.
-		"initializationOptions": map[string]any{"semanticTokens": true},
+		"processId":             os.Getpid(),
+		"rootUri":               pathToURI(root),
+		"initializationOptions": initializationOptions,
 		"capabilities": map[string]any{
 			"textDocument": map[string]any{
 				"documentSymbol": map[string]any{"hierarchicalDocumentSymbolSupport": true},
