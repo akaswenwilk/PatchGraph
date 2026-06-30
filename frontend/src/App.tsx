@@ -245,7 +245,7 @@ const GENERATED_CONTENT_MARKER =
 // can be collapsed by default, the way GitHub auto-collapses generated files.
 // Checks the path/name first (cheap, reliable) and then scans the first lines
 // of content for a generated marker.
-function isGeneratedFile(filename: string, lines: { text: string }[]): boolean {
+function isGeneratedFile(filename: string, lines: BranchDiffLine[]): boolean {
 	const path = filename.toLowerCase()
 	const basename = path.split('/').pop() ?? path
 
@@ -261,14 +261,30 @@ function isGeneratedFile(filename: string, lines: { text: string }[]): boolean {
 	}
 
 	// Scan the first handful of lines for an explicit generated marker. Most
-	// conventions put it within the leading comment block.
-	for (const line of lines.slice(0, 15)) {
-		if (GENERATED_CONTENT_MARKER.test(line.text)) {
+	// conventions put it within the leading comment block. Diff windows may have
+	// that top-of-file block hidden behind a collapsed row, so scan hidden lines
+	// as real file content instead of only checking rendered rows.
+	for (const text of firstDiffLineTexts(lines, 15)) {
+		if (GENERATED_CONTENT_MARKER.test(text)) {
 			return true
 		}
 	}
 
 	return false
+}
+
+function firstDiffLineTexts(lines: BranchDiffLine[], limit: number): string[] {
+	const texts: string[] = []
+	for (const line of lines) {
+		const candidates = line.kind === 'collapsed' && line.hidden ? line.hidden : [line]
+		for (const candidate of candidates) {
+			texts.push(candidate.text)
+			if (texts.length >= limit) {
+				return texts
+			}
+		}
+	}
+	return texts
 }
 
 function isBranchComparison(value: unknown): value is BranchComparison {

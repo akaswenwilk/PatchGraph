@@ -555,6 +555,10 @@ function LspLocationGroup({
 	locations: LspLocation[]
 	onOpenLocation?: OpenLocation
 }) {
+	const [expanded, setExpanded] = useState(false)
+	const visibleLocations = expanded ? locations : locations.slice(0, MAX_LOCATIONS_SHOWN)
+	const hiddenCount = locations.length - MAX_LOCATIONS_SHOWN
+
 	if (locations.length === 0) {
 		return null
 	}
@@ -565,17 +569,21 @@ function LspLocationGroup({
 				{label}
 				<span className="lsp-popover-count">{locations.length}</span>
 			</span>
-			{locations.slice(0, MAX_LOCATIONS_SHOWN).map((location, index) => (
+			{visibleLocations.map((location, index) => (
 				<LspLocationItem
 					key={index}
 					location={location}
 					onOpenLocation={onOpenLocation}
 				/>
 			))}
-			{locations.length > MAX_LOCATIONS_SHOWN ? (
-				<span className="lsp-popover-location lsp-popover-more">
-					+{locations.length - MAX_LOCATIONS_SHOWN} more
-				</span>
+			{hiddenCount > 0 && !expanded ? (
+				<button
+					type="button"
+					className="lsp-popover-location lsp-popover-more"
+					onClick={() => setExpanded(true)}
+				>
+					+{hiddenCount} more
+				</button>
 			) : null}
 		</span>
 	)
